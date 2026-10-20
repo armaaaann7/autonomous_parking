@@ -1,0 +1,16 @@
+ppo:
+  policy: MlpPolicy
+  n_envs: 4
+  n_steps: 512
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  learning_rate: 0.0003
+  ent_coef: 0.0  # SB3 default; an earlier 0.02 caused the action std to diverge (to >2.0) instead
+                 # of shrinking, so the policy's *mean* action stayed frozen at full-brake while
+                 # stochastic rollout noise alone passed the curriculum's success threshold --
+                 # see docs/REVIEW.md
+  clip_range: 0.2
+  net_arch: [128, 128]
+  normalize_reward: true

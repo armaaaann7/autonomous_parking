@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Autonomous Parking Viewer</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22cc;--text:#e6edf3;--dim:#8b949e;--accent:#4fc3f7;--ok:#3fb950;--bad:#f85149}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  canvas{display:block}
+  .panel{position:fixed;background:var(--panel);backdrop-filter:blur(8px);border:1px solid #30363d;border-radius:10px;padding:10px 14px}
+  #hud{left:12px;top:12px;min-width:230px}
+  #hud h1{font-size:13px;margin:0 0 6px;color:var(--accent)}
+  #hud .row{display:flex;justify-content:space-between;gap:16px}
+  #hud .row span:first-child{color:var(--dim)}
+  .bar{height:6px;background:#30363d;border-radius:3px;margin:2px 0 6px;position:relative}
+  .bar i{position:absolute;top:0;bottom:0;border-radius:3px}
+  #result{margin-top:6px;font-weight:700}
+  #ctrl{left:12px;right:12px;bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  #opts{right:12px;top:12px}
+  #opts label{display:block;white-space:nowrap}
+  button,select{background:#21262d;color:var(--text);border:1px solid #30363d;border-radius:8px;padding:7px 12px;font:inherit;cursor:pointer}
+  button.primary{background:var(--accent);color:#04202b;border:none;font-weight:700}
+  input[type=range]{accent-color:var(--accent)}
+  #scrub{flex:1;min-width:140px}
+  #loading{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);z-index:5;transition:opacity .4s}
+  #loading.done{opacity:0;pointer-events:none}
+  #msg{max-width:520px;text-align:center;color:var(--dim)}
+  .legend span{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+</style>
+</head>
+<body>
+<div id="loading"><div id="msg">Loading scene…</div></div>
+<div id="hud" class="panel">
+  <h1 id="title">Autonomous Parking</h1>
+  <div class="row"><span>step</span><span id="v-step">0</span></div>
+  <div class="row"><span>speed</span><span id="v-speed">0.00 m/s</span></div>
+  <div class="row"><span>steer cmd</span><span id="v-steer">0.00</span></div>
+  <div class="bar"><i id="b-steer" style="background:var(--accent)"></i></div>
+  <div class="row"><span>throttle / brake</span><span id="v-thb">0.00</span></div>
+  <div class="bar"><i id="b-thb" style="background:var(--ok)"></i></div>
+  <div class="row"><span>shield</span><span id="v-shield">off</span></div>
+  <div id="result"></div>
+</div>
+<div id="opts" class="panel legend">
+  <label><input type="checkbox" id="o-hit" checked> <span style="background:#ff5252"></span>collision hitboxes</label>
+  <label><input type="checkbox" id="o-act" checked> <span style="background:#4fc3f7"></span>action vectors</label>
+  <label><input type="checkbox" id="o-trail" checked> <span style="background:#ffd54f"></span>path trail</label>
+  <label><input type="checkbox" id="o-slot" checked> <span style="background:#69f0ae"></span>target slot</label>
+  <label style="margin-top:6px">camera
+    <select id="cam"><option value="orbit">orbit</option><option value="chase">chase</option><option value="top">top-down</option></select></label>
+  <label style="margin-top:6px">episode <select id="traj"></select></label>
+</div>
+<div id="ctrl" class="panel">
+  <button id="play" class="primary">⏸ Pause</button>
+  <button id="replay">⟲ Replay</button>
+  <input id="scrub" type="range" min="0" max="1000" value="0">
+  <label>speed <select id="rate"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select>×</label>
+</div>
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}
+</script>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

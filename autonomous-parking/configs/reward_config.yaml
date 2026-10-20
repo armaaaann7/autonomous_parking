@@ -1,0 +1,10 @@
+# Per-step reward (blueprint Part 10, with the review fixes documented in docs/REVIEW.md)
+time_penalty: 0.01        # per step
+w_dist: 0.5               # progress shaping on distance to slot centre
+w_heading: 0.3            # progress shaping on |heading error| (rad)
+w_smooth: 0.02            # |delta steer| penalty (kept small: a large value discourages the
+                           # steering variance early PPO exploration needs to find the goal at all)
+w_speed_near: 0.0         # optional: penalise speed when close to the slot (0 = off)
+collision_penalty: 20.0   # NOTE: must exceed timeout penalty, otherwise crashing beats dithering
+success_bonus: 100.0
+timeout_penalty: 10.0
