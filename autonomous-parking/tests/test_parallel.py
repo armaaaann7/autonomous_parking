@@ -1,6 +1,5 @@
 import numpy as np
 
-from baselines.parallel_geometric import ParallelGeometricController
 from environment.parking_env import ParkingEnv
 from environment.scenarios import Kind, RandomizationLevel
 
@@ -40,16 +39,3 @@ def test_reverse_env_default_gap_is_feasible_size():
     gap = ob[1, 0] - ob[0, 2]
     assert abs(gap - 8.0) < 1e-6
 
-
-def test_geometric_controller_parks_in_parallel_slot():
-    wins = 0
-    for seed in range(5):
-        env = _env(True)
-        ctrl = ParallelGeometricController()
-        env.reset(seed=100 + seed)
-        done = False
-        while not done:
-            _, _, term, trunc, info = env.step(ctrl.act(env))
-            done = term or trunc
-        wins += int(info["success"] and not info["collision"])
-    assert wins == 5

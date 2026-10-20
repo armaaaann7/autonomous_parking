@@ -1,0 +1,32 @@
+{
+  "fuzzy_only+env": {
+    "episodes": 60,
+    "step_instant_collisions": 0,
+    "episodes_with_any_interpolated_overlap": 0
+  },
+  "fuzzy_precise+env": {
+    "episodes": 60,
+    "step_instant_collisions": 0,
+    "episodes_with_any_interpolated_overlap": 0
+  },
+  "ppo_only+env": {
+    "episodes": 60,
+    "step_instant_collisions": 0,
+    "episodes_with_any_interpolated_overlap": 0
+  },
+  "ppo_v2+env": {
+    "episodes": 60,
+    "step_instant_collisions": 0,
+    "episodes_with_any_interpolated_overlap": 0
+  },
+  "ppo_fuzzy_bolted+env": {
+    "episodes": 60,
+    "step_instant_collisions": 0,
+    "episodes_with_any_interpolated_overlap": 0
+  },
+  "ppo_v2_fuzzy+env": {
+    "episodes": 60,
+    "step_instant_collisions": 0,
+    "episodes_with_any_interpolated_overlap": 0
+  }
+}

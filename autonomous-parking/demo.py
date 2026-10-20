@@ -1,12 +1,3 @@
-"""Watch a controller park (blueprint Part 26).
-
-Live window:
-    python demo.py --controller ppo_shielded --model models/ppo_shielded
-
-Headless (saves an animated GIF instead of opening a window -- use this one in this sandbox,
-or anywhere without a display):
-    python demo.py --controller ppo_shielded --model models/ppo_shielded --save-gif out.gif
-"""
 from __future__ import annotations
 
 import argparse
@@ -14,29 +5,25 @@ import os
 
 
 def build_adapter(name: str, model_path: str):
-    from evaluation.run_experiments import (FuzzyOnlyAdapter, ParallelGeometricAdapter, PPOOnlyAdapter,
-                                             PPOPlusShieldAdapter, RuleBasedAdapter)
-    return {
-        "rule_based": lambda: RuleBasedAdapter(),
-        "fuzzy_only": lambda: FuzzyOnlyAdapter(),
-        "ppo_only": lambda: PPOOnlyAdapter(model_path),
-        "ppo_fuzzy_bolted": lambda: PPOPlusShieldAdapter(model_path, "ppo_fuzzy_bolted"),
-        "ppo_shielded": lambda: PPOPlusShieldAdapter(model_path, "ppo_shielded"),
-        "parallel_geometric": lambda: ParallelGeometricAdapter(),
-    }[name]()
+    from evaluation.run_experiments import make_adapter
+    return make_adapter(name, model_path)
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--controller", choices=["rule_based", "fuzzy_only", "ppo_only", "ppo_fuzzy_bolted", "ppo_shielded", "parallel_geometric"],
-                    default="fuzzy_only")
-    p.add_argument("--model", default="models/ppo_shielded.zip")
+    from evaluation.run_experiments import ADAPTER_NAMES
+    names = list(ADAPTER_NAMES) + [n + "+env" for n in ADAPTER_NAMES]
+    p.add_argument("--controller", choices=names, default="fuzzy_only")
+    p.add_argument("--model", default="models/ppo_only_best.zip")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--kind", choices=["parallel", "perpendicular", "both"], default="both",
-                    help="'both' matches evaluation.run_experiments' default, so --seed lines up with its CSVs")
+    p.add_argument("--kind", choices=["perpendicular"], default="perpendicular",
+                    help="Project comparison uses perpendicular parking")
     p.add_argument("--save-gif", default=None, help="path to write an animated GIF instead of a live window")
     p.add_argument("--fps", type=int, default=20)
     args = p.parse_args()
+    from pathlib import Path
+    if not args.controller.startswith('fuzzy_only') and not Path(args.model).with_suffix('.zip').is_file():
+        p.error(f'Missing PPO checkpoint {args.model}. Copy models/ppo_only_best.zip into autonomous-parking/models/.')
 
     if args.save_gif:
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -48,17 +35,13 @@ def main():
 
     kind_map = {"parallel": [Kind.PARALLEL], "perpendicular": [Kind.PERPENDICULAR],
                 "both": [Kind.PARALLEL, Kind.PERPENDICULAR]}
-    reverse = args.controller == "parallel_geometric"
-    if reverse:
-        args.kind = "parallel"
     render_mode = "rgb_array" if args.save_gif else "human"
     # Match evaluation.run_experiments' defaults (both kinds, SLOT_POSITION randomization), not
     # ParkingEnv's own defaults, so a --seed here lines up with the same episode in its CSVs --
     # scenario_kinds length changes how many RNG draws reset() makes before picking a start pose,
     # so even "the same seed" silently picks a different episode if this list doesn't match.
     env = ParkingEnv({"scenario_kinds": kind_map[args.kind], "render_mode": render_mode,
-                       "randomization": RandomizationLevel.SLOT_POSITION,
-                       "allow_reverse": reverse, **({"min_start_distance_scale": 1.0} if reverse else {})})
+                       "randomization": RandomizationLevel.SLOT_POSITION})
     adapter = build_adapter(args.controller, args.model)
     adapter.reset()
 

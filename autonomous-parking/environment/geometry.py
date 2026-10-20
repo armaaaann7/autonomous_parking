@@ -93,3 +93,40 @@ def raycast_aabb(origins: np.ndarray, dirs: np.ndarray, aabbs: np.ndarray, max_r
     hit = (tmax >= 0.0) & (tmin <= tmax)
     t = np.where(hit, np.maximum(tmin, 0.0), np.inf)
     return np.minimum(t.min(axis=1), max_range)
+
+
+def _point_segment_distance(pts: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Distance from each point in ``pts`` (N, 2) to the segment a-b (each (2,))."""
+    ab = b - a
+    denom = float(ab @ ab)
+    if denom < 1e-18:
+        return np.linalg.norm(pts - a, axis=1)
+    t = np.clip(((pts - a) @ ab) / denom, 0.0, 1.0)
+    return np.linalg.norm(pts - (a + t[:, None] * ab), axis=1)
+
+
+def obb_aabb_distance(corners: np.ndarray, aabbs: np.ndarray) -> np.ndarray:
+    """Exact minimum Euclidean distance between one OBB and each AABB (0 when they overlap or touch).
+
+    For two disjoint convex polygons the minimum distance is attained at a vertex of one polygon
+    and a point on an edge of the other, so it is the minimum over all vertex-to-edge distances in
+    both directions. This is the car's *true body clearance* (unlike a ray cast from the body
+    centre, which is blind to the car's 4.2 x 1.8 m footprint and to obstacles between rays).
+
+    corners : (4, 2) OBB corners; aabbs : (M, 4) rows [xmin, ymin, xmax, ymax]. Returns (M,).
+    """
+    aabbs = np.asarray(aabbs, dtype=float).reshape(-1, 4)
+    out = np.empty(len(aabbs))
+    overlap = obb_aabb_overlap(corners, aabbs)
+    for i, bx in enumerate(aabbs):
+        if overlap[i]:
+            out[i] = 0.0
+            continue
+        box = np.array([[bx[0], bx[1]], [bx[2], bx[1]], [bx[2], bx[3]], [bx[0], bx[3]]])
+        best = np.inf
+        for k in range(4):
+            best = min(best,
+                       _point_segment_distance(corners, box[k], box[(k + 1) % 4]).min(),
+                       _point_segment_distance(box, corners[k], corners[(k + 1) % 4]).min())
+        out[i] = best
+    return out

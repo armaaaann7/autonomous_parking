@@ -1,0 +1,12 @@
+{
+  "episodes": 391,
+  "skipped_unsafe_start": 9,
+  "collisions": 0,
+  "interventions": 33595,
+  "steps": 58650,
+  "min_clearance_all": 4.954788236024566e-05,
+  "episodes_start_clearance_ge_margin": 380,
+  "min_clearance_when_start_ge_margin": 0.05001234334846916,
+  "episodes_start_clearance_lt_margin": 11,
+  "min_clearance_when_start_lt_margin": 4.954788236024566e-05
+}

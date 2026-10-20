@@ -1,0 +1,36 @@
+{
+  "seeds": "8000..8099",
+  "success_mode": "pose",
+  "model": "models/ppo_v2_curriculum_selected",
+  "variant": "no Mamdani shield, no stall latch",
+  "rows": [
+    {
+      "rl_weight": 0.0,
+      "success": 0.8,
+      "collision": 0.2,
+      "timeout": 0.0,
+      "mean_steps": 43.76
+    },
+    {
+      "rl_weight": 0.25,
+      "success": 0.77,
+      "collision": 0.23,
+      "timeout": 0.0,
+      "mean_steps": 39.08
+    },
+    {
+      "rl_weight": 0.5,
+      "success": 0.76,
+      "collision": 0.11,
+      "timeout": 0.13,
+      "mean_steps": 99.69
+    },
+    {
+      "rl_weight": 0.75,
+      "success": 0.7,
+      "collision": 0.05,
+      "timeout": 0.25,
+      "mean_steps": 150.52
+    }
+  ]
+}

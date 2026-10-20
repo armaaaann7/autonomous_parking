@@ -1,0 +1,98 @@
+{
+  "episodes": 100,
+  "seeds": "3000..3099",
+  "ppo_queried": true,
+  "ppo_mean_action_live_steps": [
+    -0.1112,
+    0.4926
+  ],
+  "ppo_std_action_live_steps": [
+    0.0561,
+    0.2147
+  ],
+  "ppo_min": [
+    -0.264,
+    -0.046
+  ],
+  "ppo_max": [
+    -0.005,
+    0.773
+  ],
+  "ppo_distinct_actions_on_fuzzy_states": 1274,
+  "ppo_states_checked": 1420,
+  "live_steps_before_latch": 1340,
+  "total_steps": 6122,
+  "mean_first_recovery_step": 14.875,
+  "episodes_latched": 96,
+  "latch_step_histogram": {
+    "12": 77,
+    "18": 1,
+    "22": 3,
+    "23": 1,
+    "24": 4,
+    "25": 2,
+    "28": 1,
+    "29": 3,
+    "30": 1,
+    "33": 1,
+    "36": 1,
+    "37": 1
+  },
+  "mean_recovery_fraction": 0.707876305568888,
+  "mean_abs_diff_ppo_vs_fuzzy_action[steer,thb]": [
+    0.2999,
+    0.4952
+  ],
+  "mean_abs_diff_blend_vs_fuzzy[steer,thb]_before_braking_priority": [
+    0.075,
+    0.1238
+  ],
+  "mean_abs_diff_applied_vs_fuzzy[steer,thb]_live_steps": [
+    0.4831,
+    1.2049
+  ],
+  "mean_abs_diff_ppo_vs_fuzzy_on_fuzzy_states": [
+    0.25999999046325684,
+    0.1777999997138977
+  ],
+  "mean_abs_diff_blend_vs_fuzzy_on_fuzzy_states": [
+    0.06499999761581421,
+    0.04450000077486038
+  ],
+  "mamdani_shield_active_live_steps": 1139,
+  "episodes_same_outcome_as_fuzzy_only": 100,
+  "episodes_same_step_count_as_fuzzy_only": 4,
+  "hybrid_outcomes": {
+    "success": 0.88,
+    "collision": 0.12,
+    "timeout": 0.0
+  },
+  "fuzzy_outcomes": {
+    "success": 0.88,
+    "collision": 0.12,
+    "timeout": 0.0
+  },
+  "tuning_seed_counterfactuals": {
+    "seeds": "7000..7099",
+    "fuzzy_only": {
+      "success": 0.94,
+      "collision": 0.06,
+      "timeout": 0.0
+    },
+    "hybrid_default(w=.25,latch=12)": {
+      "success": 0.93,
+      "collision": 0.07,
+      "timeout": 0.0
+    },
+    "hybrid_no_latch(w=.25)": {
+      "success": 0.03,
+      "collision": 0.0,
+      "timeout": 0.97
+    },
+    "hybrid_no_latch(w=.50)": {
+      "success": 0.03,
+      "collision": 0.0,
+      "timeout": 0.97
+    }
+  }
+}

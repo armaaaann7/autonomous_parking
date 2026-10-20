@@ -16,15 +16,9 @@ from fuzzy.fuzzy_system import FuzzySystem
 
 class HybridController:
     def __init__(self, fuzzy: FuzzySystem | None = None, safe_threshold: float = 1.0, enabled: bool = True):
-        # NOTE: safe_threshold is deliberately tight (1.0m, not the fuzzy system's own ~3m
-        # "medium distance" range). PPO is trained with NO shield in the loop (rl/train_ppo.py),
-        # so every shield intervention at test time is out-of-distribution for the policy. With
-        # neighbour cars parked close to the slot, a generous threshold makes the shield active
-        # on >90% of steps, constantly perturbing an otherwise-competent approach and dragging
-        # success down well below PPO-alone (see docs/REVIEW.md). The methodologically correct
-        # fix is to train a policy WITH the shield wrapped into the environment from the start
-        # (true "shielded RL", not shield-bolted-on-at-test-time); this tight threshold is the
-        # pragmatic stand-in given this session's compute budget.
+        # Tight obstacle-distance threshold limits interference with fine parking actions.
+        # The main comparison applies this shield to an existing unshielded PPO policy.
+        # It is a heuristic intervention, not a formal collision-avoidance guarantee.
         self.fuzzy = fuzzy or FuzzySystem()
         self.safe_threshold = safe_threshold
         self.enabled = enabled
@@ -33,6 +27,12 @@ class HybridController:
 
     def act(self, a_rl, d_obs: float, angle_err_deg: float, speed: float):
         steer, thb = float(a_rl[0]), float(a_rl[1])
+        if self.enabled and not (np.isfinite(d_obs) and np.isfinite(angle_err_deg) and np.isfinite(speed)
+                                 and np.isfinite(steer) and np.isfinite(thb)):
+            # Fail safe: invalid sensor/policy values -> brake fully, keep steering finite.
+            self.last_shield_active = True
+            self.last_fuzzy_out = None
+            return np.array([float(np.clip(steer, -1, 1)) if np.isfinite(steer) else 0.0, -1.0], dtype=np.float32)
         if not self.enabled or d_obs >= self.safe_threshold:
             self.last_shield_active = False
             self.last_fuzzy_out = None

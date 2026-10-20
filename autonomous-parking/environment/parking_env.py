@@ -34,7 +34,7 @@ import numpy as np
 import yaml
 from gymnasium import spaces
 
-from .geometry import obb_aabb_overlap, wrap_angle
+from .geometry import obb_aabb_distance, obb_aabb_overlap, wrap_angle
 from .scenarios import Kind, RandomizationLevel, make_scenario, slot_rectangle
 from .sensors import cast_rays
 from .vehicle import Vehicle
@@ -68,6 +68,15 @@ class ParkingEnv(gym.Env):
         self.heading_tol = np.deg2rad(env_cfg["success"]["heading_tol_deg"])
         self.speed_tol = env_cfg["success"]["speed_tol"]
         self.hold_steps = env_cfg["success"]["hold_steps"]
+        # Success definition (see VALIDATION/AUDIT docs):
+        #   "pose"      (default, LEGACY): centre within pos_tol, heading within heading_tol, speed
+        #                within speed_tol, held hold_steps steps. All historical results use this.
+        #   "contained" (STRICT): the whole 4.2 x 1.8 m footprint lies inside the painted
+        #                2.4 x 4.8 m bay rectangle (zero protrusion), heading within heading_tol,
+        #                speed within speed_tol, held hold_steps steps. pos_tol is not used.
+        self.success_mode = config.get("success_mode", "pose")
+        if self.success_mode not in ("pose", "contained"):
+            raise ValueError("success_mode must be 'pose' or 'contained'")
 
         self.scenario_kinds = config.get("scenario_kinds", [Kind.PARALLEL, Kind.PERPENDICULAR])
         self.randomization = RandomizationLevel(config.get("randomization", RandomizationLevel.NONE))
@@ -88,11 +97,10 @@ class ParkingEnv(gym.Env):
         self.parallel_gap = config.get("parallel_gap")
         if self.allow_reverse and self.parallel_gap is None:
             # A 3.6 m-radius car cannot enter a gap much smaller than ~7.4 m in one reverse S-curve;
-            # 8.0 m (~1.9 car lengths) is solved 100% of the time by baselines/parallel_geometric.py.
+            # Legacy reverse-mode gap retained for environment compatibility.
             self.parallel_gap = 8.0
 
         self.vehicle = Vehicle(env_cfg["vehicle"], dt=self.dt)
-        obs_dim = 6 + self.n_rays
         # [dx, dy, sin, cos, v, delta, rays...]; bounded (not +-inf) so check_env doesn't warn
         # and so SB3's default observation normalisation has something sane to work with.
         bound = np.concatenate([[40.0, 40.0, 1.0, 1.0, self.vehicle.max_speed, self.vehicle.max_steer],
@@ -156,10 +164,19 @@ class ParkingEnv(gym.Env):
         dist = self._dist_to_slot()
         heading_err = self._heading_err()
         collided = self._check_collision() or self._out_of_bounds()
-        ok_now = (dist < self.pos_tol and abs(heading_err) < self.heading_tol
-                  and abs(self.vehicle.v) < self.speed_tol)
+        protrusion = self.bay_protrusion()
+        contained = protrusion <= 1e-9
+        pose_ok = (dist < self.pos_tol and abs(heading_err) < self.heading_tol
+                   and abs(self.vehicle.v) < self.speed_tol)
+        if self.success_mode == "contained":
+            ok_now = contained and abs(heading_err) < self.heading_tol and abs(self.vehicle.v) < self.speed_tol
+        else:
+            ok_now = pose_ok
         self._success_streak = self._success_streak + 1 if ok_now else 0
-        succeeded = self._success_streak >= self.hold_steps
+        # A step that collides can never count as a successful park, even if the centre pose is
+        # inside the tolerance box (the car's corners can clip a neighbour while its centre is
+        # within 0.4 m / 15 deg of the slot centre).
+        succeeded = self._success_streak >= self.hold_steps and not collided
         timed_out = self.steps >= self.max_steps
 
         reward = self._reward(dist, heading_err, steer_cmd - prev_steer, collided, succeeded, timed_out)
@@ -174,6 +191,8 @@ class ParkingEnv(gym.Env):
             "success": succeeded, "collision": collided, "timeout": truncated,
             "pos_error": dist, "heading_error_deg": np.rad2deg(abs(heading_err)),
             "action_final": [float(steer_cmd), float(accel_cmd), float(brake_cmd)],
+            "contained": bool(contained), "bay_protrusion": float(protrusion),
+            "pose_ok": bool(pose_ok), "slot_frame_error": self.slot_frame_error(),
         }
         return obs, reward, terminated, truncated, info
 
@@ -233,12 +252,16 @@ class ParkingEnv(gym.Env):
         near = max(0.0, 1.0 - dist / self.pos_tol / 3.0)
         aligned = max(0.0, 1.0 - abs(heading_err) / self.heading_tol / 3.0)
         slow = max(0.0, 1.0 - abs(self.vehicle.v) / self.speed_tol / 3.0)
-        r += 0.3 * near * aligned * slow
+        # Do not pay the docking bonus repeatedly for remaining stationary outside
+        # the success region. Bonus requires actual improvement or a valid park.
+        progressing = self._prev_dist - dist > 1e-4 or abs(self._prev_heading_err) - abs(heading_err) > 1e-4
+        if progressing or succeeded:
+            r += 0.3 * near * aligned * slow
         if collided:
             r -= c["collision_penalty"]
         if succeeded:
             r += c["success_bonus"]
-        if timed_out:
+        if timed_out and not (collided or succeeded):
             r -= c["timeout_penalty"]
         return float(r)
 
@@ -266,9 +289,94 @@ class ParkingEnv(gym.Env):
         obstacle_bearing_deg = float(np.rad2deg(wrap_angle(-ray_angle)))  # negate: CW-positive convention
         return d_obs, obstacle_bearing_deg, float(self.vehicle.v)
 
+    def bay_protrusion(self) -> float:
+        """Largest distance (m) by which any car corner lies outside the painted bay rectangle
+        (bay = car + 0.6 m in each dimension), 0.0 if the whole car is inside. Diagnostic only: the
+        success criterion is centre pose + heading + speed (configs/env_config.yaml), which is
+        looser than 'fully inside the lines' (0.4 m centre tolerance vs 0.3 m bay clearance)."""
+        r = slot_rectangle(self.scenario, self.vehicle.length, self.vehicle.width)
+        c = self.vehicle.corners()
+        return float(max(0.0, r[0] - c[:, 0].min(), c[:, 0].max() - r[2],
+                         r[1] - c[:, 1].min(), c[:, 1].max() - r[3]))
+
+    def slot_frame_error(self):
+        """(longitudinal, lateral) offset in metres of the car centre from the slot centre, in the
+        slot frame: longitudinal = along the slot's long axis (the direction the car should face),
+        positive = beyond the slot centre; lateral = across it."""
+        sx, sy, st = self.scenario.slot_pose
+        dx, dy = self.vehicle.x - sx, self.vehicle.y - sy
+        return (float(np.cos(st) * dx + np.sin(st) * dy), float(-np.sin(st) * dx + np.cos(st) * dy))
+
+    def inside_bay(self) -> bool:
+        return self.bay_protrusion() <= 1e-9
+
+    # ------------------------------------------------------------ true-geometry safety queries
+    def body_clearance(self) -> float:
+        """Exact minimum distance (m) from the car's 4.2 x 1.8 m footprint to any obstacle, capped
+        at the sensor range. 0 means touching/overlapping. Independent of the 8 centre rays."""
+        obs = self.scenario.obstacles
+        if len(obs) == 0:
+            return float(self.sensor_range)
+        return float(min(obb_aabb_distance(self.vehicle.corners(), obs).min(), self.sensor_range))
+
+    def shield_inputs(self):
+        """(clearance, obstacle_bearing_deg, speed) for the Mamdani shield, using TRUE body
+        clearance instead of the centre-ray distance used by ``fuzzy_inputs``. The bearing points
+        (clockwise-positive, like ``fuzzy_inputs``) at the closest point of the nearest obstacle."""
+        obs = self.scenario.obstacles
+        if len(obs) == 0:
+            return float(self.sensor_range), 0.0, float(abs(self.vehicle.v))
+        dist = obb_aabb_distance(self.vehicle.corners(), obs)
+        i = int(np.argmin(dist))
+        box = obs[i]
+        px = float(np.clip(self.vehicle.x, box[0], box[2]))
+        py = float(np.clip(self.vehicle.y, box[1], box[3]))
+        ang = np.arctan2(py - self.vehicle.y, px - self.vehicle.x) - self.vehicle.theta
+        return (float(min(dist[i], self.sensor_range)), float(np.rad2deg(wrap_angle(-ang))),
+                float(abs(self.vehicle.v)))
+
+    def braking_envelope_safe(self, action, hold_steer_cmd=None, max_brake_steps: int = 80, margin: float = 0.0):
+        """Model-based check used by the envelope shield (integration/envelope_shield.py).
+
+        Simulates, on a scratch copy of the vehicle, ONE step of ``action`` followed by full braking
+        with the steering command held until the car stops, and checks the car's true OBB against
+        every obstacle and the bounds at each step. Returns (safe, first_unsafe_step or None).
+        The scratch vehicle uses exactly the same dynamics as the real one (``Vehicle.step``).
+        """
+        steer_cmd, thb = np.clip(np.asarray(action, dtype=float), -1.0, 1.0)
+        if self.allow_reverse:
+            raise NotImplementedError("envelope shield is implemented for forward-only action semantics")
+        sim = Vehicle(self.env_cfg["vehicle"], dt=self.dt)
+        sim.reset(self.vehicle.x, self.vehicle.y, self.vehicle.theta)
+        sim.v, sim.delta = self.vehicle.v, self.vehicle.delta
+        xmin, xmax, ymin, ymax = self.scenario.bounds
+        obstacles = self.scenario.obstacles
+        # Optional safety margin: obstacles are inflated by `margin` metres on every side (a
+        # conservative superset of the true margin neighbourhood). If the car is already closer than
+        # the margin, it is not applied for this call, otherwise no action could ever be "safe".
+        if margin > 0.0 and len(obstacles) and self.body_clearance() >= margin:
+            obstacles = obstacles + np.array([-margin, -margin, margin, margin])
+
+        def unsafe():
+            if not (xmin <= sim.x <= xmax and ymin <= sim.y <= ymax):
+                return True
+            return bool(len(obstacles) and obb_aabb_overlap(sim.corners(), obstacles).any())
+
+        sim.step(steer_cmd, max(thb, 0.0), max(-thb, 0.0))
+        if unsafe():
+            return False, 1
+        hold = steer_cmd if hold_steer_cmd is None else float(hold_steer_cmd)
+        for k in range(2, max_brake_steps + 2):
+            if sim.v <= 0.0:
+                break
+            sim.step(hold, 0.0, 1.0)
+            if unsafe():
+                return False, k
+        return True, None
+
     def slot_bearing_deg(self) -> float:
         """Bearing to the slot centre, CCW-positive (i.e. positive = steer_cmd should be positive
-        to turn toward it, matching baselines/rule_based_controller.py's convention). Used by
+        to turn toward it, using the navigation steering convention). Used by
         fuzzy/fuzzy_only_controller.py for its navigation term -- kept separate from
         ``fuzzy_inputs()`` because the two need opposite sign conventions for different purposes.
         """

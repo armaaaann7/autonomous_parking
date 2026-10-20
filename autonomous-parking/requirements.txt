@@ -20,3 +20,6 @@ tensorboard>=2.16
 # platform may need the regular `pip install torch` (or a GPU build from
 # https://pytorch.org/get-started/locally/).
 torch==2.14.1
+
+imageio>=2.31
+networkx>=3.0

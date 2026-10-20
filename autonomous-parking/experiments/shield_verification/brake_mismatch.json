@@ -1,0 +1,26 @@
+{
+  "real_brake_x1.0": {
+    "adversarial_episodes": 197,
+    "adversarial_collisions": 0,
+    "fuzzy_precise_env_episodes": 100,
+    "fuzzy_precise_env_collisions": 0
+  },
+  "real_brake_x0.85": {
+    "adversarial_episodes": 198,
+    "adversarial_collisions": 49,
+    "fuzzy_precise_env_episodes": 100,
+    "fuzzy_precise_env_collisions": 0
+  },
+  "real_brake_x0.7": {
+    "adversarial_episodes": 198,
+    "adversarial_collisions": 114,
+    "fuzzy_precise_env_episodes": 100,
+    "fuzzy_precise_env_collisions": 0
+  },
+  "real_brake_x0.5": {
+    "adversarial_episodes": 198,
+    "adversarial_collisions": 156,
+    "fuzzy_precise_env_episodes": 100,
+    "fuzzy_precise_env_collisions": 0
+  }
+}

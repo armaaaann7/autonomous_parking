@@ -1,0 +1,42 @@
+{
+  "fuzzy_only_env": {
+    "n": 500,
+    "pose_timeouts": 81,
+    "pose_timeouts_pct": 16.2,
+    "of_which_unshielded_run_collided": 58,
+    "of_which_unshielded_run_succeeded": 23,
+    "of_which_unshielded_run_timed_out": 0,
+    "shield_active_frac_mean_in_pose_timeouts": 0.962,
+    "median_final_dist_to_slot_m_in_pose_timeouts": 4.27
+  },
+  "fuzzy_precise_env": {
+    "n": 500,
+    "pose_timeouts": 81,
+    "pose_timeouts_pct": 16.2,
+    "of_which_unshielded_run_collided": 58,
+    "of_which_unshielded_run_succeeded": 23,
+    "of_which_unshielded_run_timed_out": 0,
+    "shield_active_frac_mean_in_pose_timeouts": 0.962,
+    "median_final_dist_to_slot_m_in_pose_timeouts": 4.27
+  },
+  "ppo_v2_env": {
+    "n": 500,
+    "pose_timeouts": 167,
+    "pose_timeouts_pct": 33.4,
+    "of_which_unshielded_run_collided": 20,
+    "of_which_unshielded_run_succeeded": 9,
+    "of_which_unshielded_run_timed_out": 138,
+    "shield_active_frac_mean_in_pose_timeouts": 0.154,
+    "median_final_dist_to_slot_m_in_pose_timeouts": 4.8
+  },
+  "ppo_only_env": {
+    "n": 500,
+    "pose_timeouts": 471,
+    "pose_timeouts_pct": 94.2,
+    "of_which_unshielded_run_collided": 216,
+    "of_which_unshielded_run_succeeded": 1,
+    "of_which_unshielded_run_timed_out": 254,
+    "shield_active_frac_mean_in_pose_timeouts": 0.359,
+    "median_final_dist_to_slot_m_in_pose_timeouts": 1.87
+  }
+}

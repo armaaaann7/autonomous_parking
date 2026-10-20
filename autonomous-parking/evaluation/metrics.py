@@ -37,6 +37,24 @@ def summarize(df: pd.DataFrame) -> dict:
     }
     if "shield_active_frac" in df.columns:
         out["shield_active_frac"] = df["shield_active_frac"].mean()
+    lo, hi = wilson_interval(int(succ.sum()), len(df))
+    out["success_ci_low"], out["success_ci_high"] = lo, hi
+    if "in_bay" in df.columns:
+        inbay = df["in_bay"].astype(bool)
+        out["strict_in_bay_rate"] = float((succ & inbay).mean())      # success AND car fully inside the bay lines
+        out["in_bay_given_success"] = float(inbay[succ].mean()) if succ.any() else float("nan")
+    if "bay_protrusion_m" in df.columns:
+        out["bay_protrusion_median_m"] = float(df.loc[succ, "bay_protrusion_m"].median()) if succ.any() else float("nan")
+    out["completion_rate"] = float(1.0 - df["collision"].astype(bool).mean() - df["timeout"].astype(bool).mean())
+    if "success_mode" in df.columns:
+        out["success_mode"] = str(df["success_mode"].iloc[0])
+    if "long_error_m" in df.columns:
+        # final signed offsets from the slot centre in the slot frame (all episodes that did not collide)
+        ok = ~df["collision"].astype(bool)
+        out["final_long_error_abs_m"] = float(df.loc[ok, "long_error_m"].abs().mean()) if ok.any() else float("nan")
+        out["final_lat_error_abs_m"] = float(df.loc[ok, "lat_error_m"].abs().mean()) if ok.any() else float("nan")
+    if "min_clearance_m" in df.columns:
+        out["min_clearance_m_worst"] = float(df["min_clearance_m"].min())
     return out
 
 
@@ -55,3 +73,35 @@ def two_proportion_z_test(success_a: np.ndarray, success_b: np.ndarray) -> tuple
     z = (p1 - p2) / se
     p_value = 2 * (1 - norm.cdf(abs(z)))
     return float(z), float(p_value)
+
+
+def wilson_interval(k: int, n: int, z: float = 1.959964) -> tuple[float, float]:
+    """95% Wilson score interval for a binomial proportion k/n, as fractions in [0, 1]."""
+    if n <= 0:
+        raise ValueError("n must be positive")
+    if not 0 <= k <= n:
+        raise ValueError("k must satisfy 0 <= k <= n")
+    p = k / n
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return float(max(0.0, centre - half)), float(min(1.0, centre + half))
+
+
+def mcnemar_exact(a: np.ndarray, b: np.ndarray) -> tuple[int, int, float]:
+    """Exact McNemar test for PAIRED binary outcomes (same seeds for both controllers).
+
+    Returns (n_a_only, n_b_only, two-sided p). Only discordant episodes carry information; under
+    H0 each discordant pair is a fair coin flip. Unlike the unpaired two-proportion z-test this
+    respects that every controller faced the same scenario for each seed.
+    """
+    from scipy.stats import binomtest
+
+    a = np.asarray(a, dtype=bool)
+    b = np.asarray(b, dtype=bool)
+    if a.shape != b.shape:
+        raise ValueError("paired outcomes must have equal length")
+    n_a = int((a & ~b).sum())
+    n_b = int((~a & b).sum())
+    if n_a + n_b == 0:
+        return n_a, n_b, 1.0
+    return n_a, n_b, float(binomtest(n_a, n_a + n_b, 0.5).pvalue)

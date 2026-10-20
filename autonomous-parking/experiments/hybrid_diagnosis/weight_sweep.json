@@ -1,0 +1,49 @@
+{
+  "seeds": "7000..7099",
+  "success_mode": "pose",
+  "variant": "no Mamdani shield, no stall latch",
+  "rows": [
+    {
+      "rl_weight": 0.0,
+      "success": 0.94,
+      "collision": 0.06,
+      "timeout": 0.0,
+      "mean_steps": 55.82
+    },
+    {
+      "rl_weight": 0.1,
+      "success": 0.93,
+      "collision": 0.07,
+      "timeout": 0.0,
+      "mean_steps": 54.49
+    },
+    {
+      "rl_weight": 0.25,
+      "success": 0.92,
+      "collision": 0.08,
+      "timeout": 0.0,
+      "mean_steps": 53.13
+    },
+    {
+      "rl_weight": 0.5,
+      "success": 0.88,
+      "collision": 0.12,
+      "timeout": 0.0,
+      "mean_steps": 56.18
+    },
+    {
+      "rl_weight": 0.75,
+      "success": 0.03,
+      "collision": 0.26,
+      "timeout": 0.71,
+      "mean_steps": 361.57
+    },
+    {
+      "rl_weight": 1.0,
+      "success": 0.03,
+      "collision": 0.36,
+      "timeout": 0.61,
+      "mean_steps": 314.23
+    }
+  ]
+}

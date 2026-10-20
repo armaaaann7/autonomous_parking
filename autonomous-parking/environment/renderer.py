@@ -96,7 +96,7 @@ class Renderer:
             f"steer {env.vehicle.delta / max(env.vehicle.max_steer,1e-9):+.2f}  "
             f"v {env.vehicle.v:+.2f} m/s",
             f"pos_err {env._dist_to_slot():.2f} m   step {env.steps}/{env.max_steps}",
-            f"fuzzy shield: {'ACTIVE' if self.shield_active else 'idle'}",
+            f"safety shield: {'INTERVENING' if self.shield_active else 'idle'}",
         ]
         for i, line in enumerate(lines):
             color = SHIELD_ON if (i == 2 and self.shield_active) else TEXT

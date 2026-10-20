@@ -26,7 +26,7 @@ class ShieldedParkingEnv(gym.Wrapper):
 
     def step(self, action):
         base = self.env.unwrapped
-        d_obs, bearing, speed = base.fuzzy_inputs()
+        d_obs, bearing, speed = base.shield_inputs()   # true body clearance, not centre-ray distance
         shielded = self.hybrid.act(np.asarray(action, dtype=np.float32), d_obs, bearing, speed)
         obs, reward, term, trunc, info = self.env.step(shielded)
         self._steps += 1

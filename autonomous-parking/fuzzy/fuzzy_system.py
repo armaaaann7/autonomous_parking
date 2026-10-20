@@ -81,6 +81,10 @@ class FuzzySystem:
         self._speed_sim = ctrl.ControlSystemSimulation(ctrl.ControlSystem(speed_rules))
 
     def compute(self, d_obs: float, angle_err_deg: float, speed: float) -> dict:
+        if not (np.isfinite(d_obs) and np.isfinite(angle_err_deg) and np.isfinite(speed)):
+            # scikit-fuzzy silently returns NaN outputs for NaN inputs, which would then poison the
+            # action sent to the vehicle; fail loudly instead.
+            raise ValueError(f"non-finite fuzzy input: d_obs={d_obs}, angle_err_deg={angle_err_deg}, speed={speed}")
         d_obs = float(np.clip(d_obs, 0.0, 10.0))
         angle_err_deg = float(np.clip(angle_err_deg, -90.0, 90.0))
         speed = float(np.clip(speed, 0.0, 3.0))

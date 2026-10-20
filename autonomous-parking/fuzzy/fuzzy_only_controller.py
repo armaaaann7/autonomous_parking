@@ -1,44 +1,51 @@
-"""Fuzzy system driving the car directly (blueprint Part 17, Experiment 3 / Part 5's "Approach
-A"). This isolates what hand-designed expert knowledge alone achieves, with no RL involved.
+"""Zero-order Sugeno fuzzy navigation with a low-level speed controller.
 
-The fuzzy rule base (fuzzy_system.py) only ever modelled obstacle AVOIDANCE (brake near
-obstacles, steer away from them) -- it was never a general-purpose "steer toward any target"
-controller, and its angle_err input uses a clockwise-positive convention specifically for that
-(see ParkingEnv.fuzzy_inputs's docstring). An earlier version of this file fed it the
-bearing-to-slot instead and used its output as the only steering signal, which both pointed the
-car the wrong way (navigation needs the opposite sign convention) and had no distinct avoidance
-behaviour layered on top. This version mirrors integration/hybrid_controller.py's architecture
-instead: a plain proportional-navigation steer toward the slot, with the SAME fuzzy avoidance
-correction the RL+Fuzzy hybrid uses added on top. See docs/REVIEW.md.
+Linguistic direction rules steer right/straight/left. Distance rules request
+stop/creep/cruise. Rolling-resistance feedforward prevents positive throttle
+commands below the vehicle's motion threshold from stranding the car.
 """
-from __future__ import annotations
-
 import numpy as np
 
-from .fuzzy_system import FuzzySystem
+
+def infer(value, centres, consequents):
+    """Triangular memberships with shoulder sets; weighted singleton outputs."""
+    membership = np.maximum(0., 1. - np.abs(np.asarray(centres) - value) / (centres[1] - centres[0]))
+    membership[0] = max(membership[0], float(value <= centres[0]))
+    membership[-1] = max(membership[-1], float(value >= centres[-1]))
+    return float(np.dot(membership, consequents) / max(membership.sum(), 1e-9))
 
 
 class FuzzyOnlyController:
-    def __init__(self, fuzzy: FuzzySystem | None = None, slow_dist: float = 3.0, safe_threshold: float = 3.0):
-        self.fuzzy = fuzzy or FuzzySystem()
-        self.slow_dist = slow_dist
-        self.safe_threshold = safe_threshold
+    def __init__(self, fuzzy=None, slow_dist=3., safe_threshold=3., stop_radius=.32, heading_gain=.6):
+        # stop_radius: brake to a halt once the centre is this close to the slot centre. The
+        # historical value .32 m is larger than the bay's .30 m end clearance, so the car stops
+        # with its rear overhanging the bay (audit finding D6). Do not change the default: it
+        # defines the legacy 'fuzzy_only' results.
+        self.stop_radius = float(stop_radius)
+        # heading_gain: weight of the heading-error term in the steering error (legacy .6)
+        self.heading_gain = float(heading_gain)
+        self.last_mode = 'fuzzy navigation'
 
-    def act(self, obs: np.ndarray, fuzzy_inputs, slot_bearing_deg: float) -> np.ndarray:
-        d_obs, obstacle_bearing_deg, speed = fuzzy_inputs
-        dx, dy = obs[0], obs[1]
-        heading_err = np.arctan2(obs[2], obs[3])
-        dist = float(np.hypot(dx, dy))
-
-        # navigation: same proportional law as the rule-based baseline
-        steer = float(np.clip(1.5 * np.deg2rad(slot_bearing_deg) - 0.5 * heading_err, -1.0, 1.0))
-        target_throttle = float(np.clip(dist / self.slow_dist, 0.15, 1.0))
-        thb = target_throttle
-
-        if d_obs < self.safe_threshold:
-            out = self.fuzzy.compute(d_obs, obstacle_bearing_deg, speed)
-            steer = float(np.clip(steer + out["steer_corr"], -1.0, 1.0))
-            throttle_cap = max(1.0 + min(out["speed_adj"], 0.0), 0.0)
-            thb = min(thb, throttle_cap) - out["brake_cmd"]
-
-        return np.array([steer, float(np.clip(thb, -1.0, 1.0))], dtype=np.float32)
+    def act(self, obs, fuzzy_inputs, slot_bearing_deg):
+        dist = float(np.hypot(obs[0], obs[1]))
+        heading = float(np.arctan2(obs[2], obs[3]))
+        bearing = float(np.deg2rad(slot_bearing_deg))
+        # Heading correction prevents aiming at the position while ignoring orientation.
+        error = float(np.clip(1.6 * bearing - self.heading_gain * heading, -1, 1))
+        steer = infer(error, [-1., -.5, 0., .5, 1.], [-1., -.5, 0., .5, 1.])
+        if dist < self.stop_radius:
+            self.last_mode = 'fuzzy stop'
+            return np.array([steer, -1.], dtype=np.float32)
+        target = infer(dist, [0., .65, 1.3, 1.95], [0., .325, .65, .65])
+        target = max(.12, target)
+        d_obs, obstacle_bearing, speed = fuzzy_inputs
+        # Neighbour cars beside a legal bay are not a reason to brake indefinitely.
+        # Restrict emergency braking to the forward corridor, not the nearest side ray.
+        if abs(obstacle_bearing) < 30. and d_obs < 2.6:
+            target = min(target, max(0., (d_obs - 2.2) * .5))
+        self.last_mode = 'fuzzy navigation'
+        thb = float(np.clip(.25 + 1.8 * (target - speed), -1, 1))
+        if target == 0.:
+            thb = -1.
+            self.last_mode = 'fuzzy obstacle brake'
+        return np.array([steer, thb], dtype=np.float32)

@@ -1,0 +1,7 @@
+model,n,success,collision,timeout,in_bay_end,mean_pos_err_success
+models/exp_ppo_cur_s1_best,100,0.55,0.04,0.41,0.11,0.2423738202785834
+models/exp_ppo_cur_s1,100,0.6,0.04,0.36,0.37,0.20266127650405064
+models/exp_ppo_cur_s2_best,100,0.63,0.06,0.31,0.32,0.1834875973466391
+models/exp_ppo_cur_s2,100,0.55,0.05,0.4,0.28,0.24557108033723374
+models/exp_ppo_cur_s3_best,100,0.7,0.03,0.27,0.45,0.16306244160555355
+models/exp_ppo_cur_s3,100,0.6,0.02,0.38,0.26,0.26536123913344095

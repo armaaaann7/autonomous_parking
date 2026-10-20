@@ -29,7 +29,9 @@ let S = null;          // current episode state
 let playing = true, t = 0, last = performance.now();
 
 async function loadEpisode(url) {
-  const data = await (await fetch(url, { cache: 'no-store' })).json();
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) throw new Error('Recording missing. Run python prepare_comparison.py in autonomous-parking first.');
+  const data = await response.json();
   if (S) scene.remove(S.root);
   const root = new THREE.Group(); scene.add(root);
   const car = data.car;
@@ -75,10 +77,12 @@ async function loadEpisode(url) {
   for (let i = 1; i < data.frames.length; i++) cum.push(cum[i - 1] + data.frames[i].v * data.dt);
   S = { rig, cum, data, root, ego, egoHit, hitboxes, vectors, trail, slotGroup, N: data.frames.length - 1 };
   const r = data.result;
-  $('title').textContent = `${data.controller || 'unknown controller'} · ${data.kind} · seed ${data.seed}`;
-  $('result').innerHTML = r.success ? '<span style="color:var(--ok)">✔ parked</span>'
-    : r.collision ? '<span style="color:var(--bad)">✖ collision</span>' : '<span style="color:var(--bad)">✖ timeout</span>';
+  $('title').textContent = `${CONFIG.names[data.controller] || data.controller} · ${data.kind} · seed ${data.seed}`;
+  const col = data.outcome === 'parked inside the bay' ? 'var(--ok)' : (r.collision || /timeout/.test(data.outcome || '')) ? 'var(--bad)' : '#f0b429';
+  $('result').innerHTML = 'Recorded outcome: <span style="color:' + col + '">' + (data.outcome || (r.success ? 'parked' : r.collision ? 'collision' : 'timeout')) + '</span>';
   $('result').innerHTML += ` <span style="color:var(--dim);font-weight:400">pos err ${r.pos_error.toFixed(2)} m · hdg ${r.heading_error_deg.toFixed(1)}°</span>`;
+  if (data.pose_success_step !== undefined && data.pose_success_step !== null) $('result').innerHTML += `<br><span style="font-weight:400;color:var(--dim)">pose criterion first met at step ${data.pose_success_step}</span>`;
+  if (typeof data.in_bay === 'boolean') $('result').innerHTML += `<br><span style="font-weight:400;color:${data.in_bay ? 'var(--ok)' : '#f0b429'}">${data.in_bay ? 'car fully inside the bay lines (final frame)' : 'car partly outside the bay lines (final frame)'}</span>`;
   window.__S = S; window.__camera = camera; window.__orbit = orbit;   // debug handles
   t = 0; playing = true; $('play').textContent = '⏸ Pause';
   applyOptions(); apply(0);
@@ -108,15 +112,19 @@ function apply(time) {
   const act = S.N === 0 ? A.action : B.action;
   updateActionVectors(S.vectors, act, f.v, !!S.data.reverse);
   flashHitbox(S.egoHit, B.collision && k > 0.5);
-  const idx = Math.round(time);
+  const idx = Math.min(S.N, Math.round(time));
   const F = S.data.frames[Math.min(S.N, idx)];
   $('v-step').textContent = `${idx} / ${S.N}`;
   $('v-speed').textContent = `${f.v.toFixed(2)} m/s`;
   $('v-steer').textContent = act[0].toFixed(2);
   const brk = S.data.reverse ? ((act[1] < 0 && f.v > 0.05) || (act[1] > 0 && f.v < -0.05)) : act[1] < 0;
   $('v-thb').textContent = act[1].toFixed(2) + (brk ? ' (brake)' : (f.v < -0.05 ? ' (reverse)' : ''));
-  $('v-shield').textContent = F.shield ? 'ACTIVE' : 'off';
+  $('v-shield').textContent = (F.shield ? '⚠ ' : '') + (F.mode || (S.data.controller === 'fuzzy_only' ? 'Fuzzy navigation' : 'RL driving'));
   $('v-shield').style.color = F.shield ? 'var(--bad)' : '';
+  $('v-prot').textContent = (typeof F.protrusion === 'number') ? (F.protrusion <= 1e-9 ? 'inside' : `${(F.protrusion * 100).toFixed(1)} cm`) : 'n/a';
+  $('v-prot').style.color = (typeof F.protrusion === 'number' && F.protrusion <= 1e-9) ? 'var(--ok)' : '';
+  $('v-clear').textContent = (typeof F.clearance === 'number') ? `${F.clearance.toFixed(2)} m` : 'n/a';
+  $('v-clear').style.color = (typeof F.clearance === 'number' && F.clearance < 0.15) ? 'var(--bad)' : '';
   bar($('b-steer'), act[0]); bar($('b-thb'), act[1], true);
   $('scrub').value = Math.round((time / Math.max(1, S.N)) * 1000);
 }
@@ -133,12 +141,17 @@ function applyOptions() {
 }
 ['o-hit', 'o-act', 'o-trail', 'o-slot'].forEach(id => $(id).addEventListener('change', () => S && applyOptions()));
 
-$('play').onclick = () => { playing = !playing; $('play').textContent = playing ? '⏸ Pause' : '▶ Play'; last = performance.now(); if (playing && t >= S.N) t = 0; };
-$('replay').onclick = () => { t = 0; playing = true; $('play').textContent = '⏸ Pause'; last = performance.now(); };
-$('scrub').oninput = e => { t = (e.target.value / 1000) * S.N; playing = false; $('play').textContent = '▶ Play'; apply(t); };
+$('play').onclick = () => { if (!S) return; playing = !playing; $('play').textContent = playing ? '⏸ Pause' : '▶ Play'; last = performance.now(); if (playing && t >= S.N) t = 0; };
+$('replay').onclick = () => { if (!S) return; t = 0; playing = true; $('play').textContent = '⏸ Pause'; last = performance.now(); };
+$('scrub').oninput = e => { if (!S) return; t = (e.target.value / 1000) * S.N; playing = false; $('play').textContent = '▶ Play'; apply(t); };
 $('cam').onchange = () => { orbit.enabled = $('cam').value === 'orbit'; };
 CONFIG.episodes.forEach((e, i) => { const o = document.createElement('option'); o.value = e.url; o.textContent = e.label; $('traj').appendChild(o); });
-$('traj').onchange = () => loadEpisode($('traj').value);
+$('traj').onchange = async () => {
+  $('traj').disabled = true; playing = false;
+  try { await loadEpisode($('traj').value); }
+  catch (error) { if (S) scene.remove(S.root); S = null; $('title').textContent = 'Recording unavailable'; $('result').textContent = error.message; }
+  finally { $('traj').disabled = false; }
+};
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
 function cameraRig() {
@@ -174,6 +187,6 @@ try {
   window.__ready = true;
   requestAnimationFrame(tick);
 } catch (e) {
-  $('msg').innerHTML = `Could not load the episode.<br><br><code>${e}</code><br><br>Serve this folder over HTTP: <code>python3 -m http.server 8000</code> then open <code>http://localhost:8000</code>.`;
+  $('msg').textContent = 'Recordings are not ready. Copy your trained PPO model into autonomous-parking/models, then run python prepare_comparison.py from autonomous-parking. Refresh this page afterwards. Details: ' + e.message;
   console.error(e);
 }

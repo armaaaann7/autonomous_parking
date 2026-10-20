@@ -7,7 +7,7 @@ start pose -> slot position -> obstacles -> sensor noise, each layered on top of
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -38,7 +38,7 @@ class Scenario:
 
 def _slot_rect(pose: np.ndarray, length: float, width: float) -> np.ndarray:
     x, y, theta = pose
-    c, s = np.cos(theta), np.sin(theta)
+    s = np.sin(theta)
     # Slot footprint aligned with theta; for our fixed 0/90 deg slots this stays axis-aligned.
     if abs(s) < 0.5:
         return np.array([x - length / 2, y - width / 2, x + length / 2, y + width / 2])

@@ -1,71 +1,57 @@
-# Autonomous Parking: Rule-Based vs Fuzzy vs RL vs RL+Fuzzy
+# Autonomous Parking Using Reinforcement Learning and Fuzzy Logic
 
-A 2D simulation comparing four parking controllers, built from (and fixing several bugs in) an
-initial project blueprint. See **`docs/REVIEW.md`** for the full list of bugs found and fixed,
-the RL-training debugging story, and honest limitations — read that before trusting any number
-in here.
+Three approaches: Fuzzy-only, RL-only (PPO), RL + Fuzzy. Perpendicular parking only in the project comparison.
 
-## What's here
+## Open the included three-controller demonstration
+From this autonomous-parking folder in Terminal:
 
-```
-environment/   kinematic bicycle vehicle model, ray-cast sensors, Gymnasium env, pygame renderer
-fuzzy/         Mamdani fuzzy safety system + a fuzzy-only baseline controller
-baselines/     hand-coded rule-based controller
-integration/   RL + fuzzy "shield" hybrid controller
-rl/            PPO training (Stable-Baselines3) with a curriculum, + a policy wrapper
-evaluation/    N-episode harness + comparison table/plots across all 4 controllers
-tests/         pytest suite (40 tests): geometry cross-checked vs shapely, vehicle kinematics,
-               fuzzy rule-base completeness, shield safety invariants, env integration
-configs/       environment + reward YAML
-demo.py        watch any controller drive one episode (live window or exported GIF)
-```
+    python3 ../viewer/serve.py
 
-## Quickstart
+Open the printed URL and choose a controller. The server automatically tries another port if 8000 is occupied.
+Three genuine recordings for the same scenario (seed 1000) are bundled. Fuzzy-only and RL + Fuzzy park; the unchanged RL-only baseline times out. The viewer replays exported trajectories; it is not live inference. The result label is the final outcome, while control mode describes the current frame.
 
-```bash
-pip install -r requirements.txt
-# On Linux, prefer: pip install torch --no-deps   (see the note in requirements.txt)
+## Your model is now included
+models/ppo_only_best.zip is your uploaded original checkpoint, byte-for-byte unchanged, with 100,352 training timesteps recorded in its metadata. No copying or retraining is required to view or reproduce these examples. It remains an unreliable baseline, not a fully trained parking solution.
 
-python -m pytest tests/ -q                     # 40 tests, ~2s
+## What was fixed
+- Fuzzy-only now uses zero-order Sugeno direction and distance-to-target rules, plus speed feedback and rolling-resistance compensation. It brakes near the goal. Side neighbours no longer trigger blanket braking that stops it outside the slot.
+- RL + Fuzzy combines 25% PPO action with 75% Sugeno fuzzy navigation action. Fuzzy braking has priority, followed by the existing Mamdani obstacle shield. If stationary for 1.2 seconds outside the target tolerance, it switches to fuzzy recovery for the rest of that episode. The viewer labels normal fusion as RL 25% + Fuzzy 75%, and fallback as Fuzzy recovery (PPO stalled). This is a weighted hybrid with supervisory fallback, not a newly trained neural model or a shield-only method.
+- Raw RL-only is intentionally unchanged for an honest baseline.
+- The reward used by future training no longer repeatedly pays a positive docking bonus while stationary outside the success region. This does not retroactively improve saved weights.
+- Collision geometry, vehicle physics, action/observation spaces and parking success thresholds are unchanged.
 
-python -m rl.train_ppo --timesteps 600000 --out models/ppo_parking_v1 --curriculum
-# continue training later: add --resume (picks up weights + curriculum stage automatically)
+## Re-run all three with your Python environment
+Enter autonomous-parking, then activate your existing virtual environment using its absolute path, for example:
 
-python -m evaluation.run_experiments --episodes 100 --ppo-model models/ppo_parking_v1
-python -m evaluation.compare_controllers --dir experiments/results
+    cd autonomous-parking
+    source ~/Downloads/autonomous-parking-project/autonomous-parking/.venv/bin/activate
+    python prepare_comparison.py --seed 1000
+    python ../viewer/serve.py
 
-python demo.py --controller ppo_fuzzy --model models/ppo_parking_v1.zip --seed 1002 \
-    --save-gif out.gif          # headless; drop --save-gif for a live window if you have a display
-```
+For a fresh environment use python3 -m venv .venv, activate .venv/bin/activate, then python -m pip install -r requirements.txt.
 
-## Current results (100 episodes/controller, both scenario kinds, slot+start-pose randomization)
+## Live 2D demos
+From autonomous-parking, close each window before running another:
 
-| Controller | Success | Collision | Timeout |
-|---|---|---|---|
-| Rule-Based | 3% | 39% | 58% |
-| Fuzzy-only | 3% | 14% | 83% |
-| **PPO** | **32%** | **11%** | 57% |
-| PPO + Fuzzy | 32% | 11% | 57% |
+    python demo.py --controller fuzzy_only --seed 1000
+    python demo.py --controller ppo_only --model models/ppo_only_best --seed 1000
+    python demo.py --controller ppo_fuzzy_bolted --model models/ppo_only_best --seed 1000
 
-PPO clearly beats both hand-designed baselines. It's undertrained (single CPU core, no GPU in the
-build environment) — `docs/REVIEW.md` has concrete next steps, including `--resume` for more
-training and why the fuzzy shield currently shows no measurable effect (it needs to be trained
-through, not bolted on at evaluation time).
+The legacy internal identifier ppo_fuzzy_bolted now selects the documented supervisory RL + Fuzzy approach (weighted fusion, obstacle shield and stall recovery).
 
-## Key design decisions worth knowing before you extend this
+## Evaluate fairly
 
-- **Action space**: `[steer, throttle_brake]` (2-dim; sign of the second value selects
-  throttle vs. brake), resolving an ambiguity in the original blueprint between a 2-dim and 3-dim
-  action.
-- **Success** requires position (0.4m), heading (15°) and speed (0.2 m/s) tolerances held for 2
-  consecutive steps — loosened slightly from the blueprint's 0.3m/10°/3-step figures, which left
-  very little room for a continuous controller with rate-limited steering to settle into (these
-  were explicitly marked "approximate" in the blueprint).
-- **Training curriculum** (`rl/train_ppo.py`) ramps three axes in order: obstacle presence, start
-  distance (sampled as a *range* up to the current max, not a fixed point — pinning it to a point
-  caused catastrophic forgetting of easier cases), then the blueprint's own Part-9 domain
-  randomization (start pose → slot position → obstacle position → sensor noise).
-- **The fuzzy shield's `angle_err` input is obstacle bearing, not slot bearing** — it's an
-  avoidance signal, not a navigation one. Mixing these up (feeding it slot bearing) was a bug
-  found mid-build; see `docs/REVIEW.md` §2.1 if you're adding a new controller that touches the
-  shield.
+    python -m evaluation.run_experiments --episodes 100 --seed 3000 --out-dir experiments/final_evaluation
+    python -m evaluation.compare_controllers --dir experiments/final_evaluation
+
+All three use matching seeds, scenario randomization, physics and success conditions. Failures are retained. Bundled results are from 100 scenarios, seeds 3000-3099, not selected successful runs. See DIAGNOSIS.md for results and limits. Fuzzy-only scored 88/100 and the hybrid 87/100; this does not establish a meaningful difference; do not claim the hybrid is the best or guarantees safety.
+The shield_active_frac CSV column is retained for compatibility; it now counts ANY hybrid intervention, including weighted fusion and recovery, not only obstacle shielding.
+
+## Optional future learning
+No training was performed for this repair. To improve raw RL, train and evaluate separately. Back up all models first. To continue the best weights without overwriting them, copy ppo_only_best.zip to a new model name and resume using that path. A stage sidecar was not supplied with the upload; restore the matching stage file from your Mac before curriculum resumption, or use an explicitly selected curriculum stage. Do not assume more steps guarantee success.
+
+## Tests
+
+    python -m pytest tests/ -q
+
+Tests cover geometry, vehicle dynamics, environment, fuzzy/shield behaviour, the reproduced stall scenario, recovery reset, and the stationary reward issue. Passing tests does not establish real-world safety. Generic reverse/parallel support remains internal for compatibility but is excluded from this project's comparison. No geometric or rule-based controller is part of this deliverable.

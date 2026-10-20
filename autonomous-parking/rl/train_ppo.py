@@ -2,7 +2,7 @@
 from Part 9: start at ``RandomizationLevel.NONE`` and step up once success rate clears 80%.
 
 Usage:
-    python -m rl.train_ppo --timesteps 300000 --out models/ppo_parking_v1
+    python -m rl.train_ppo --timesteps 300000 --out models/ppo_only
     python -m rl.train_ppo --timesteps 300000 --curriculum   # auto-advance randomization
 
 Differences from the blueprint's Step-5 sketch: config is loaded from
@@ -164,12 +164,22 @@ def evaluate_policy(model, n_episodes: int = 40, shielded: bool = False, safe_th
     return {"success": succ / n_episodes, "collision": coll / n_episodes}
 
 
+def _tb_dir():
+    """TensorBoard log dir, or None when tensorboard is not installed (training still works)."""
+    try:
+        import tensorboard  # noqa: F401
+    except ImportError:
+        return None
+    return str(_HERE / "experiments" / "tb_logs")
+
+
 def _stage_sidecar(out_path: Path) -> Path:
     return out_path.with_suffix(".stage.json")
 
 
 def train(timesteps: int, out_path: str, curriculum: bool, seed: int = 0,
-          resume: bool = False, init_stage: int = 0, shielded: bool = False, safe_threshold: float = 1.0, chunk: int = 100_000):
+          resume: bool = False, init_stage: int = 0, shielded: bool = False, safe_threshold: float = 1.0, chunk: int = 100_000,
+          val_seed: int = 5000, val_episodes: int = 40):
     import json
     with open(_HERE / "rl" / "configs" / "ppo_config.yaml") as f:
         cfg = yaml.safe_load(f)["ppo"]
@@ -192,7 +202,7 @@ def train(timesteps: int, out_path: str, curriculum: bool, seed: int = 0,
     if resume and out.with_suffix(".zip").exists():
         # tensorboard_log is stored in the checkpoint as an absolute path from the machine that
         # trained it (e.g. /home/claude/...); override it or resuming elsewhere crashes.
-        tb_log = str(_HERE / "experiments" / "tb_logs")
+        tb_log = _tb_dir()
         model = PPO.load(str(out), env=venv, custom_objects={"tensorboard_log": tb_log})
         print(f"[resume] loaded weights from {out}.zip")
     else:
@@ -202,7 +212,7 @@ def train(timesteps: int, out_path: str, curriculum: bool, seed: int = 0,
             gamma=cfg["gamma"], gae_lambda=cfg["gae_lambda"], learning_rate=cfg["learning_rate"],
             ent_coef=cfg["ent_coef"], clip_range=cfg["clip_range"],
             policy_kwargs={"net_arch": cfg["net_arch"]},
-            tensorboard_log=str(_HERE / "experiments" / "tb_logs"),
+            tensorboard_log=_tb_dir(),
             seed=seed,
         )
     callback = SuccessRateCallback(curriculum=curriculum, verbose=1, init_stage=init_stage)
@@ -212,6 +222,9 @@ def train(timesteps: int, out_path: str, curriculum: bool, seed: int = 0,
     best_path = out.parent / (out.name + "_best")
     best_sidecar = best_path.with_suffix(".stage.json")
     best = {"success": -1.0, "collision": 1.0}
+    if resume and best_sidecar.exists():          # keep the best-so-far across --resume invocations
+        _b = json.loads(best_sidecar.read_text())
+        best = {"success": _b.get("success", -1.0), "collision": _b.get("collision", 1.0)}
     done, first = 0, True
     while done < timesteps:
         n = min(chunk, timesteps - done)
@@ -221,9 +234,9 @@ def train(timesteps: int, out_path: str, curriculum: bool, seed: int = 0,
         done += n
         model.save(str(out))
         sidecar.write_text(json.dumps({"stage": callback.stage}))
-        ev = evaluate_policy(model, shielded=shielded, safe_threshold=safe_threshold)
+        ev = evaluate_policy(model, n_episodes=val_episodes, shielded=shielded, safe_threshold=safe_threshold, seed0=val_seed)
         flag = ""
-        if ev["success"] > best["success"]:
+        if ev["success"] > best["success"] or (ev["success"] == best["success"] and ev["collision"] < best["collision"]):
             best = ev
             model.save(str(best_path))
             best_sidecar.write_text(json.dumps({"stage": callback.stage, **ev}))
@@ -239,7 +252,7 @@ def train(timesteps: int, out_path: str, curriculum: bool, seed: int = 0,
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--timesteps", type=int, default=300_000)
-    p.add_argument("--out", type=str, default="models/ppo_parking_v1")
+    p.add_argument("--out", type=str, default="models/ppo_only")
     p.add_argument("--curriculum", action="store_true")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", action="store_true", help="continue from --out's saved weights + curriculum stage")
@@ -247,8 +260,12 @@ if __name__ == "__main__":
     p.add_argument("--shielded", action="store_true", help="train THROUGH the fuzzy safety shield")
     p.add_argument("--safe-threshold", type=float, default=1.0)
     p.add_argument("--chunk", type=int, default=100_000, help="checkpoint every N steps")
+    p.add_argument("--val-seed", type=int, default=5000,
+                   help="first seed of the checkpoint-selection (validation) episodes. The ORIGINAL training used 5000, which "
+                        "overlaps the audit's evaluation set B (5000-5199); new experiments use 7000+ (see AUDIT P3)")
+    p.add_argument("--val-episodes", type=int, default=40)
     p.add_argument("--reverse", action="store_true", help="enable the reverse gear (needed to learn parallel parking)")
-    p.add_argument("--kinds", choices=["both", "parallel", "perpendicular"], default="both")
+    p.add_argument("--kinds", choices=["perpendicular"], default="perpendicular")
     args = p.parse_args()
     if args.reverse:
         ENV_EXTRA["allow_reverse"] = True
@@ -256,4 +273,4 @@ if __name__ == "__main__":
         from environment.scenarios import Kind as _K
         ENV_EXTRA["scenario_kinds"] = [_K.PARALLEL if args.kinds == "parallel" else _K.PERPENDICULAR]
     train(args.timesteps, args.out, args.curriculum, args.seed, args.resume, args.init_stage,
-          args.shielded, args.safe_threshold, args.chunk)
+          args.shielded, args.safe_threshold, args.chunk, args.val_seed, args.val_episodes)

@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Autonomous Parking Viewer</title>
+<title>Autonomous Parking Using Reinforcement Learning and Fuzzy Logic</title>
 <style>
   :root{--bg:#0d1117;--panel:#161b22cc;--text:#e6edf3;--dim:#8b949e;--accent:#4fc3f7;--ok:#3fb950;--bad:#f85149}
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
   canvas{display:block}
   .panel{position:fixed;background:var(--panel);backdrop-filter:blur(8px);border:1px solid #30363d;border-radius:10px;padding:10px 14px}
-  #hud{left:12px;top:12px;min-width:230px}
+  #hud{left:12px;top:12px;min-width:230px;max-width:min(360px,44vw)}
   #hud h1{font-size:13px;margin:0 0 6px;color:var(--accent)}
   #hud .row{display:flex;justify-content:space-between;gap:16px}
   #hud .row span:first-child{color:var(--dim)}
@@ -27,11 +27,15 @@
   #loading{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);z-index:5;transition:opacity .4s}
   #loading.done{opacity:0;pointer-events:none}
   #msg{max-width:520px;text-align:center;color:var(--dim)}
+  #banner{left:50%;transform:translateX(-50%);bottom:74px;z-index:3;padding:4px 10px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#f0b429;border-color:#6b5310;text-align:center;max-width:46vw}
+  #why{color:var(--dim);font-size:11px;margin-top:4px;line-height:1.35}
+  @media (max-height:760px){#why{display:none}#hud{min-width:200px}}
   .legend span{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
 </style>
 </head>
 <body>
 <div id="loading"><div id="msg">Loading scene…</div></div>
+<div id="banner" class="panel">REPLAY of a recorded simulation episode &middot; not live inference</div>
 <div id="hud" class="panel">
   <h1 id="title">Autonomous Parking</h1>
   <div class="row"><span>step</span><span id="v-step">0</span></div>
@@ -40,8 +44,11 @@
   <div class="bar"><i id="b-steer" style="background:var(--accent)"></i></div>
   <div class="row"><span>throttle / brake</span><span id="v-thb">0.00</span></div>
   <div class="bar"><i id="b-thb" style="background:var(--ok)"></i></div>
-  <div class="row"><span>shield</span><span id="v-shield">off</span></div>
+  <div class="row"><span>body clearance</span><span id="v-clear">&ndash;</span></div>
+  <div class="row"><span>outside bay by</span><span id="v-prot">&ndash;</span></div>
+  <div class="row"><span>control mode</span><span id="v-shield">off</span></div>
   <div id="result"></div>
+  <div id="why"><b>Pose success</b> (legacy): centre &le; 0.40 m from slot centre, heading &le; 15&deg;, speed &le; 0.20 m/s for 2 steps, no collision. <b>Inside bay</b> (strict): the whole 4.2&times;1.8 m car within the 2.4&times;4.8 m bay lines (0.30 m margin). Recording continues up to 4 s after the pose criterion is met.</div>
 </div>
 <div id="opts" class="panel legend">
   <label><input type="checkbox" id="o-hit" checked> <span style="background:#ff5252"></span>collision hitboxes</label>
@@ -50,7 +57,7 @@
   <label><input type="checkbox" id="o-slot" checked> <span style="background:#69f0ae"></span>target slot</label>
   <label style="margin-top:6px">camera
     <select id="cam"><option value="orbit">orbit</option><option value="chase">chase</option><option value="top">top-down</option></select></label>
-  <label style="margin-top:6px">episode <select id="traj"></select></label>
+  <label style="margin-top:6px">controller <select id="traj"></select></label>
 </div>
 <div id="ctrl" class="panel">
   <button id="play" class="primary">⏸ Pause</button>

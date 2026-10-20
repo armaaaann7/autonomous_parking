@@ -40,7 +40,7 @@ export function buildGround(scene, bounds) {
 export function slotMarking(slot, car, color) {
   const [sx, sy, th] = slot;
   const g = new THREE.Group();
-  const L = car.length + 0.8, W = car.width + 0.6;
+  const L = car.length + 0.6, W = car.width + 0.6;   // = the env bay (car + 0.6 m each way); was +0.8, which drew the bay 0.2 m too long
   const shape = new THREE.Mesh(new THREE.PlaneGeometry(L, W), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.18, depthWrite: false }));
   shape.rotation.x = -Math.PI / 2; shape.position.y = 0.012; g.add(shape);
   const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(L, 0.01, W)), new THREE.LineBasicMaterial({ color }));
