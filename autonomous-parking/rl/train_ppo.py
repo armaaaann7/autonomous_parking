@@ -30,6 +30,18 @@ _HERE = Path(__file__).resolve().parent.parent
 
 # Extra ParkingEnv config applied to every training / evaluation env (set from the CLI: --reverse, --kinds).
 ENV_EXTRA: dict = {}
+# Resolved PPO hyper-parameters for the run in progress (set by train()); read by make_env/evaluate_policy.
+RUN_CFG: dict = {"obs_scale": False}
+# Extra env config used ONLY by the validation episodes that pick the best checkpoint (e.g. success_mode='contained'),
+# so training/curriculum can use the pose box while checkpoint selection uses the strict metric.
+VAL_EXTRA: dict = {}
+
+
+def _maybe_scale(env):
+    if RUN_CFG.get("obs_scale"):
+        from rl.obs_scaling import ScaledObs
+        env = ScaledObs(env)
+    return env
 
 
 # Curriculum stages: (include_obstacles, start_distance_scale, RandomizationLevel), applied in
@@ -73,6 +85,21 @@ CURRICULUM_STAGES = [
 ]
 
 
+class LinearLR:
+    """Linear learning-rate decay lr0 -> lr0*floor over ``horizon`` TOTAL timesteps.
+
+    SB3's built-in schedule is relative to each ``learn()`` call; this trainer calls learn() once per
+    checkpoint chunk (and again on --resume), so a naive ``progress_remaining`` schedule would restart
+    / collapse every chunk. This one is driven by the absolute step counter, kept in ``self.t`` by
+    ``SuccessRateCallback``. Picklable (module-level class), so --resume works."""
+
+    def __init__(self, lr0: float, horizon: int, floor: float = 0.1):
+        self.lr0, self.horizon, self.floor, self.t = float(lr0), int(horizon), float(floor), 0
+
+    def __call__(self, progress_remaining: float) -> float:
+        return self.lr0 * max(1.0 - self.t / max(self.horizon, 1), self.floor)
+
+
 class SuccessRateCallback(BaseCallback):
     """Tracks a rolling success rate and (optionally) advances ``CURRICULUM_STAGES`` once it
     crosses ``threshold`` -- avoids the "full randomization/full difficulty from step 1" failure
@@ -103,6 +130,9 @@ class SuccessRateCallback(BaseCallback):
         self._apply_stage()
 
     def _on_step(self) -> bool:
+        lr = getattr(self.model, "learning_rate", None)
+        if isinstance(lr, LinearLR):
+            lr.t = self.num_timesteps
         for info in self.locals.get("infos", []):
             if "episode" in info:  # Monitor adds this key exactly once, at episode end
                 self._buf.append(bool(info.get("success", False)))
@@ -133,7 +163,7 @@ def make_env(include_obstacles: bool, start_distance_scale: float, randomization
         if shielded:
             from environment.shielded_env import ShieldedParkingEnv
             env = ShieldedParkingEnv(env, safe_threshold=safe_threshold)
-        return Monitor(env)
+        return Monitor(_maybe_scale(env))
     return _init
 
 
@@ -145,10 +175,11 @@ def evaluate_policy(model, n_episodes: int = 40, shielded: bool = False, safe_th
     is actually collapsing on the real task -- this is the number that matters."""
     from environment.scenarios import Kind
     env = ParkingEnv({"randomization": RandomizationLevel.SLOT_POSITION,
-                      **{"scenario_kinds": [Kind.PARALLEL, Kind.PERPENDICULAR], **ENV_EXTRA}})
+                      **{"scenario_kinds": [Kind.PARALLEL, Kind.PERPENDICULAR], **ENV_EXTRA, **VAL_EXTRA}})
     if shielded:
         from environment.shielded_env import ShieldedParkingEnv
         env = ShieldedParkingEnv(env, safe_threshold=safe_threshold)
+    env = _maybe_scale(env)
     succ = coll = 0
     for i in range(n_episodes):
         obs, _ = env.reset(seed=seed0 + i)
@@ -173,19 +204,46 @@ def _tb_dir():
     return str(_HERE / "experiments" / "tb_logs")
 
 
+def checkpoint_score(ev: dict, rule: str = "success_first") -> tuple:
+    """Sort key for best-checkpoint selection (higher is better).
+
+    'success_first' (the ORIGINAL rule): max success, ties broken by lower collision. It can pick a
+    checkpoint with high collision when success is equal-or-slightly-higher (seen in the RL audit:
+    0.70 success / 0.29 collision beat 0.69 / 0.02).
+    'safe': max (success - 2 * collision), ties by success. A collision costs twice a success, so a
+    checkpoint trading safety for a few points of success is not selected."""
+    if rule == "safe":
+        return (ev["success"] - 2.0 * ev["collision"], ev["success"])
+    return (ev["success"], -ev["collision"])
+
+
+def is_better(ev: dict, best: dict, rule: str = "success_first") -> bool:
+    return checkpoint_score(ev, rule) > checkpoint_score(best, rule)
+
+
 def _stage_sidecar(out_path: Path) -> Path:
     return out_path.with_suffix(".stage.json")
 
 
 def train(timesteps: int, out_path: str, curriculum: bool, seed: int = 0,
           resume: bool = False, init_stage: int = 0, shielded: bool = False, safe_threshold: float = 1.0, chunk: int = 100_000,
-          val_seed: int = 5000, val_episodes: int = 40):
+          val_seed: int = 5000, val_episodes: int = 40, overrides: dict | None = None, select: str = "success_first"):
     import json
     with open(_HERE / "rl" / "configs" / "ppo_config.yaml") as f:
         cfg = yaml.safe_load(f)["ppo"]
+    cfg.update(overrides or {})
+    RUN_CFG.clear()
+    RUN_CFG.update(obs_scale=bool(cfg.get("obs_scale", False)))
 
     out = _HERE / out_path
     sidecar = _stage_sidecar(out)
+    meta = {"ppo": cfg, "env_extra": {k: (str(v) if k == "scenario_kinds" else v) for k, v in ENV_EXTRA.items()},
+            "obs_scale": RUN_CFG["obs_scale"], "seed": seed, "curriculum": curriculum, "shielded": shielded,
+            "val_extra": dict(VAL_EXTRA), "val_seed": val_seed, "val_episodes": val_episodes, "timesteps_requested": timesteps, "select": select}
+    meta_path = out.with_suffix(".meta.json")
+    if resume and meta_path.exists():                    # a resumed run keeps the observation convention it was built with
+        RUN_CFG["obs_scale"] = bool(json.loads(meta_path.read_text()).get("obs_scale", False))
+        meta["obs_scale"] = RUN_CFG["obs_scale"]
     if resume and sidecar.exists():
         init_stage = json.loads(sidecar.read_text())["stage"]
         print(f"[resume] continuing from stage {init_stage}")
@@ -203,15 +261,26 @@ def train(timesteps: int, out_path: str, curriculum: bool, seed: int = 0,
         # tensorboard_log is stored in the checkpoint as an absolute path from the machine that
         # trained it (e.g. /home/claude/...); override it or resuming elsewhere crashes.
         tb_log = _tb_dir()
-        model = PPO.load(str(out), env=venv, custom_objects={"tensorboard_log": tb_log})
+        co = {"tensorboard_log": tb_log}
+        if cfg.get("lr_schedule", "constant") == "linear":
+            co["learning_rate"] = co["lr_schedule"] = LinearLR(cfg["learning_rate"], cfg.get("lr_horizon", 420_000))
+        model = PPO.load(str(out), env=venv, custom_objects=co)
         print(f"[resume] loaded weights from {out}.zip")
     else:
+        import torch.nn as nn
+        lr = cfg["learning_rate"]
+        if cfg.get("lr_schedule", "constant") == "linear":
+            lr = LinearLR(lr, cfg.get("lr_horizon", 420_000))
+        pk = {"net_arch": cfg["net_arch"]}
+        if cfg.get("activation", "tanh") == "relu":
+            pk["activation_fn"] = nn.ReLU
         model = PPO(
             cfg["policy"], venv, verbose=1,
             n_steps=cfg["n_steps"], batch_size=cfg["batch_size"], n_epochs=cfg["n_epochs"],
-            gamma=cfg["gamma"], gae_lambda=cfg["gae_lambda"], learning_rate=cfg["learning_rate"],
+            gamma=cfg["gamma"], gae_lambda=cfg["gae_lambda"], learning_rate=lr,
             ent_coef=cfg["ent_coef"], clip_range=cfg["clip_range"],
-            policy_kwargs={"net_arch": cfg["net_arch"]},
+            vf_coef=cfg.get("vf_coef", 0.5), max_grad_norm=cfg.get("max_grad_norm", 0.5),
+            policy_kwargs=pk,
             tensorboard_log=_tb_dir(),
             seed=seed,
         )
@@ -233,12 +302,14 @@ def train(timesteps: int, out_path: str, curriculum: bool, seed: int = 0,
         first = False
         done += n
         model.save(str(out))
+        meta_path.write_text(json.dumps(meta, indent=1, default=str))
         sidecar.write_text(json.dumps({"stage": callback.stage}))
         ev = evaluate_policy(model, n_episodes=val_episodes, shielded=shielded, safe_threshold=safe_threshold, seed0=val_seed)
         flag = ""
-        if ev["success"] > best["success"] or (ev["success"] == best["success"] and ev["collision"] < best["collision"]):
+        if is_better(ev, best, select):
             best = ev
             model.save(str(best_path))
+            best_path.with_suffix(".meta.json").write_text(json.dumps(meta, indent=1, default=str))
             best_sidecar.write_text(json.dumps({"stage": callback.stage, **ev}))
             flag = "  <- new best, saved " + best_path.name + ".zip"
         print(f"[checkpoint] {done}/{timesteps} steps (stage {callback.stage}) | held-out eval: "
@@ -266,11 +337,39 @@ if __name__ == "__main__":
     p.add_argument("--val-episodes", type=int, default=40)
     p.add_argument("--reverse", action="store_true", help="enable the reverse gear (needed to learn parallel parking)")
     p.add_argument("--kinds", choices=["perpendicular"], default="perpendicular")
+    p.add_argument("--select", choices=["success_first", "safe"], default="success_first",
+                   help="best-checkpoint rule: 'success_first' (original) or 'safe' = success - 2*collision")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VAL",
+                   help="override a ppo_config.yaml key (e.g. --set learning_rate=1e-4 --set net_arch=[256,256] "
+                        "--set obs_scale=true --set lr_schedule=linear --set vf_coef=1.0). Recorded in <out>.meta.json")
+    p.add_argument("--reward", action="append", default=[], metavar="KEY=VAL",
+                   help="override a reward_config.yaml key for TRAINING, e.g. --reward w_contain=1.0")
+    p.add_argument("--obs-mode", choices=["legacy", "slot"], default=None, help="observation representation (environment/observations.py)")
+    p.add_argument("--val-success-mode", choices=["pose", "contained"], default=None,
+                   help="success criterion for the checkpoint-selection episodes only (default: same as training)")
+    p.add_argument("--success-mode", choices=["pose", "contained"], default=None,
+                   help="success criterion used for training/validation (default: the env default, 'pose')")
     args = p.parse_args()
+    ov = {}
+    for kv in args.set:
+        k, v = kv.split("=", 1)
+        ov[k] = yaml.safe_load(v)
+    rw = {}
+    for kv in args.reward:
+        k, v = kv.split("=", 1)
+        rw[k] = yaml.safe_load(v)
+    if rw:
+        ENV_EXTRA["reward"] = rw
+    if args.obs_mode:
+        ENV_EXTRA["obs_mode"] = args.obs_mode
+    if args.val_success_mode:
+        VAL_EXTRA["success_mode"] = args.val_success_mode
+    if args.success_mode:
+        ENV_EXTRA["success_mode"] = args.success_mode
     if args.reverse:
         ENV_EXTRA["allow_reverse"] = True
     if args.kinds != "both":
         from environment.scenarios import Kind as _K
         ENV_EXTRA["scenario_kinds"] = [_K.PARALLEL if args.kinds == "parallel" else _K.PERPENDICULAR]
     train(args.timesteps, args.out, args.curriculum, args.seed, args.resume, args.init_stage,
-          args.shielded, args.safe_threshold, args.chunk, args.val_seed, args.val_episodes)
+          args.shielded, args.safe_threshold, args.chunk, args.val_seed, args.val_episodes, ov, args.select)

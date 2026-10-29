@@ -20,6 +20,8 @@ def main():
                     help="Project comparison uses perpendicular parking")
     p.add_argument("--save-gif", default=None, help="path to write an animated GIF instead of a live window")
     p.add_argument("--fps", type=int, default=20)
+    p.add_argument("--strict", action="store_true",
+                   help="use the strict success metric (whole car inside the bay lines) instead of the legacy pose box")
     args = p.parse_args()
     from pathlib import Path
     if not args.controller.startswith('fuzzy_only') and not Path(args.model).with_suffix('.zip').is_file():
@@ -40,9 +42,10 @@ def main():
     # ParkingEnv's own defaults, so a --seed here lines up with the same episode in its CSVs --
     # scenario_kinds length changes how many RNG draws reset() makes before picking a start pose,
     # so even "the same seed" silently picks a different episode if this list doesn't match.
-    env = ParkingEnv({"scenario_kinds": kind_map[args.kind], "render_mode": render_mode,
-                       "randomization": RandomizationLevel.SLOT_POSITION})
     adapter = build_adapter(args.controller, args.model)
+    env = ParkingEnv({"scenario_kinds": kind_map[args.kind], "render_mode": render_mode,
+                       "randomization": RandomizationLevel.SLOT_POSITION, **getattr(adapter, "env_extra", {}),
+                       "success_mode": "contained" if args.strict else "pose"})
     adapter.reset()
 
     obs, info = env.reset(seed=args.seed)
@@ -72,6 +75,10 @@ def main():
             pygame.event.pump()
         done = term or trunc
     print(f"episode ended: {info}")
+    verdict = "PARKED" if info["success"] else ("COLLISION" if info["collision"] else "TIMEOUT (no collision)")
+    print(f"RESULT [{args.controller}, seed {args.seed}, metric={'strict whole-car-in-bay' if args.strict else 'legacy pose box'}]: "
+          f"{verdict} after {env.steps} steps | centre error {info['pos_error']:.2f} m | heading error {float(info['heading_error_deg']):.1f} deg | "
+          f"whole car inside bay: {info['contained']}")
 
     if args.save_gif:
         import imageio

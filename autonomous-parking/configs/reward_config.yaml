@@ -8,3 +8,4 @@ w_speed_near: 0.0         # optional: penalise speed when close to the slot (0 =
 collision_penalty: 20.0   # NOTE: must exceed timeout penalty, otherwise crashing beats dithering
 success_bonus: 100.0
 timeout_penalty: 10.0
+w_contain: 0.0            # optional potential-based bay-containment shaping (0 = original reward; see rl audit)

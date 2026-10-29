@@ -29,7 +29,7 @@ run_episodes(ad, n, list(range(seed, seed + n)), [Kind.PERPENDICULAR], Path(out)
 
 
 def part_file(out_dir, block, ctrl, seed):
-    return out_dir / "parts" / block / f"{ctrl.replace('+', '_')}.{seed}.csv"
+    return out_dir / "parts" / block / f"{ctrl.replace('+', '_').replace('/', '__').replace(':', '-')}.{seed}.csv"
 
 
 def main():
@@ -79,7 +79,7 @@ def main():
                 d = pd.concat([pd.read_csv(f) for f in fs], ignore_index=True)
                 d["episode"] = range(len(d))
                 (out_dir / f"set_{bn}").mkdir(parents=True, exist_ok=True)
-                d.to_csv(out_dir / f"set_{bn}" / f"{c.replace('+', '_')}.csv", index=False)
+                d.to_csv(out_dir / f"set_{bn}" / f"{c.replace('+', '_').replace('/', '__').replace(':', '-')}.csv", index=False)
     print("assembled", flush=True)
 
 

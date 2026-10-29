@@ -1,0 +1,15 @@
+
+# Experimental RL audit checkpoints
+autonomous-parking/models/rl_audit_*
+autonomous-parking/models/ppo_v3_rlaudit.*
+autonomous-parking/models/_to_delete/
+
+# Experimental RL audit checkpoints
+models/rl_audit_*
+models/ppo_v3_rlaudit.*
+models/_to_delete/
+
+# Generated experiment outputs
+experiments/deck_assets/
+experiments/presentation_smoke/
+experiments/rl_audit/

@@ -12,6 +12,7 @@ from fuzzy.fuzzy_only_controller import FuzzyOnlyController
 from fuzzy.fuzzy_system import FuzzySystem
 from integration.envelope_shield import BrakingEnvelopeShield
 from integration.hybrid_controller import HybridController
+from evaluation.stall import FIELDS as STALL_FIELDS, StallDetector
 
 _HERE = Path(__file__).resolve().parent.parent
 
@@ -22,7 +23,7 @@ FIELDS = [
     "recovery_frac", "min_clearance_m", "in_bay", "bay_protrusion_m",
     "long_error_m", "lat_error_m", "success_mode",
     "legacy_outcome", "pose_success_step", "ps_pos_error_m", "ps_heading_error_deg", "ps_protrusion_m", "ps_in_bay",
-]
+] + STALL_FIELDS
 
 
 # Stop radius of the containment-aware fuzzy variant ("fuzzy_precise"). Chosen on TUNING seeds only;
@@ -53,6 +54,7 @@ class PPOOnlyAdapter:
     def __init__(self, model_path: str):
         from rl.policy_wrapper import PPOPolicy
         self.policy = PPOPolicy(model_path)
+        self.env_extra = dict(self.policy.env_extra)      # obs_mode / allow_reverse the env must be built with
 
     def reset(self):
         pass
@@ -92,6 +94,7 @@ class PPOPlusShieldAdapter:
         self.name = name
         from rl.policy_wrapper import PPOPolicy
         self.policy = PPOPolicy(model_path)
+        self.env_extra = dict(self.policy.env_extra)
         self.hybrid = HybridController(FuzzySystem(), safe_threshold=safe_threshold)
         self.recovery = FuzzyOnlyController()
         self.reset()
@@ -105,6 +108,8 @@ class PPOPlusShieldAdapter:
     def act(self, obs, env):
         # Explicit supervisory hybrid: fuse RL and fuzzy actions normally; use
         # fuzzy recovery after 1.2 seconds stationary outside parking tolerance.
+        policy_obs = obs
+        obs = env.legacy_obs()          # fuzzy / stall logic reads the 14-d legacy layout whatever the policy's obs_mode
         dist = float(np.hypot(obs[0], obs[1]))
         self.stalled_steps = self.stalled_steps + 1 if abs(obs[4]) < .03 and dist >= env.pos_tol else 0
         if self.stalled_steps >= self.stall_steps:
@@ -116,7 +121,7 @@ class PPOPlusShieldAdapter:
             if self.trace is not None:
                 self.trace.append({"recovery": True, "a_final": np.array(action, float)})
             return action, 0.0
-        a_rl = self.policy.act(obs)
+        a_rl = self.policy.act(policy_obs)
         inputs = env.fuzzy_inputs()
         a_fuzzy = self.recovery.act(obs, inputs, env.slot_bearing_deg())
         # Explicit weighted fusion, not a hidden replacement of the RL baseline.
@@ -148,6 +153,7 @@ class EnvelopeAdapter:
         self.shield = shield or BrakingEnvelopeShield()
         self.name = inner.name + "_env"
         self.kinds = getattr(inner, "kinds", None)
+        self.env_extra = getattr(inner, "env_extra", {})
         self.last_mode = getattr(inner, "last_mode", "")
         self.last_recovery = False
 
@@ -168,7 +174,9 @@ class EnvelopeAdapter:
 # ppo_v2_fuzzy = 25 % ppo_v2 + 75 % Sugeno fuzzy with the Mamdani shield and stall latch DISABLED (weight chosen on
 # tuning seeds 8000-8099 as the best non-zero weight; see experiments/hybrid_diagnosis/).
 PPO_V2_MODEL = "models/ppo_v2_curriculum_selected"
-ADAPTER_NAMES = ("fuzzy_only", "ppo_only", "ppo_fuzzy_bolted", "fuzzy_precise", "ppo_v2", "ppo_v2_fuzzy")
+# PPO v3 (RL audit): 256x256 policy trained with containment shaping, see docs/RL_AUDIT.md. v2 stays untouched.
+PPO_V3_MODEL = "models/ppo_v3_rlaudit"
+ADAPTER_NAMES = ("fuzzy_only", "ppo_only", "ppo_fuzzy_bolted", "fuzzy_precise", "ppo_v2", "ppo_v2_fuzzy", "ppo_v3")
 
 
 def _named(adapter, name):
@@ -189,10 +197,19 @@ def make_adapter(name: str, model_path: str | None = None):
         base, val = base.split("@", 1)
         parts = [float(v) for v in val.split("x")]          # "r" or "rxheading_gain"
         stop_override, hg_override = parts[0], (parts[1] if len(parts) > 1 else None)
+    if base.startswith("ppo:"):          # ad-hoc checkpoint, e.g. "ppo:models/rl_audit_E1_s1_best" (RL audit experiments)
+        ckpt = base[4:]
+        ckpt_path = Path(ckpt) if Path(ckpt).is_absolute() else _HERE / ckpt
+        if not ckpt_path.with_suffix(".zip").is_file():
+            raise FileNotFoundError(f"PPO checkpoint not found: {ckpt_path}.zip")
+        adapter = _named(PPOOnlyAdapter(str(ckpt_path)), base)
+        return EnvelopeAdapter(adapter) if envelope else adapter
     if base not in ADAPTER_NAMES:
         raise ValueError(f"unknown controller {name!r}; choose from {ADAPTER_NAMES} (optionally + '+env')")
     if base in ("ppo_v2", "ppo_v2_fuzzy"):
         model_path = str(_HERE / PPO_V2_MODEL)
+    if base == "ppo_v3":
+        model_path = str(_HERE / PPO_V3_MODEL)
     if base not in ("fuzzy_only", "fuzzy_precise"):
         if not model_path or not Path(model_path).with_suffix(".zip").is_file():
             raise FileNotFoundError(f"PPO checkpoint not found: {model_path}.zip - controller {base!r} needs it")
@@ -205,6 +222,7 @@ def make_adapter(name: str, model_path: str | None = None):
                "ppo_only": lambda: PPOOnlyAdapter(str(model_path)),
                "ppo_fuzzy_bolted": lambda: PPOPlusShieldAdapter(str(model_path), "ppo_fuzzy_bolted"),
                "ppo_v2": lambda: _named(PPOOnlyAdapter(str(model_path)), "ppo_v2"),
+               "ppo_v3": lambda: _named(PPOOnlyAdapter(str(model_path)), "ppo_v3"),
                "ppo_v2_fuzzy": lambda: PPOPlusShieldAdapter(str(model_path), "ppo_v2_fuzzy", safe_threshold=0.0,
                                                            rl_weight=.25, stall_steps=10 ** 9)}[base]()
     return EnvelopeAdapter(adapter) if envelope else adapter
@@ -214,7 +232,8 @@ def make_adapter(name: str, model_path: str | None = None):
 def run_episodes(adapter, n_episodes: int, seeds: list[int], scenario_kinds, out_path: Path,
                   randomization=RandomizationLevel.SLOT_POSITION, env_extra: dict | None = None):
     scenario_kinds = getattr(adapter, "kinds", None) or scenario_kinds
-    env = ParkingEnv({"randomization": randomization, "scenario_kinds": scenario_kinds, **(env_extra or {})})
+    env = ParkingEnv({"randomization": randomization, "scenario_kinds": scenario_kinds,
+                      **getattr(adapter, "env_extra", {}), **(env_extra or {})})
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)
@@ -232,6 +251,7 @@ def run_episodes(adapter, n_episodes: int, seeds: list[int], scenario_kinds, out
             # there; in 'contained' mode it continues, so one run yields BOTH outcomes without
             # redefining either (verified against the stored legacy CSVs by tests/test_containment_metric).
             pose_streak, legacy_outcome, ps = 0, "", {}
+            stall = StallDetector()
             done = False
             while not done:
                 action, shield_active = adapter.act(obs, env)
@@ -250,6 +270,7 @@ def run_episodes(adapter, n_episodes: int, seeds: list[int], scenario_kinds, out
                 shield_sum += shield_active
                 recovery_sum += float(getattr(adapter, 'last_recovery', False))
                 min_clear = min(min_clear, env.body_clearance())
+                stall.update(env, action, step_info, bool(shield_active))
                 if not legacy_outcome:
                     pose_streak = pose_streak + 1 if step_info["pose_ok"] else 0
                     if step_info["collision"]:
@@ -276,6 +297,7 @@ def run_episodes(adapter, n_episodes: int, seeds: list[int], scenario_kinds, out
                 "pose_success_step": ps.get("pose_success_step", ""), "ps_pos_error_m": ps.get("ps_pos_error_m", ""),
                 "ps_heading_error_deg": ps.get("ps_heading_error_deg", ""), "ps_protrusion_m": ps.get("ps_protrusion_m", ""),
                 "ps_in_bay": ps.get("ps_in_bay", ""),
+                **stall.summary(),
             }
             writer.writerow(row)
     env.close()

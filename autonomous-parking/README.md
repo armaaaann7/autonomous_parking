@@ -55,3 +55,6 @@ No training was performed for this repair. To improve raw RL, train and evaluate
     python -m pytest tests/ -q
 
 Tests cover geometry, vehicle dynamics, environment, fuzzy/shield behaviour, the reproduced stall scenario, recovery reset, and the stationary reward issue. Passing tests does not establish real-world safety. Generic reverse/parallel support remains internal for compatibility but is excluded from this project's comparison. No geometric or rule-based controller is part of this deliverable.
+
+## RL audit (architecture, hyper-parameters, reward) - latest
+`docs/RL_AUDIT.md` (in `autonomous-parking/`) documents the full audit. Short version: new checkpoint `models/ppo_v3_rlaudit` (256x256 PPO, containment shaping) reaches 56.0 % strict success on 500 held-out episodes vs 46.4 % for PPO v2 (paired p = 2e-6; 54.4 % and 0 collisions with the envelope shield); fuzzy-precise is statistically equal on the strict metric (57.8 %) and still better on the pose metric. Training-seed variance (SD about 0.12) is as large as any recipe effect, so treat v3 as a good checkpoint, not a proven better recipe. "ARC" could not be identified in the code base (see the report). Run `python demo.py --controller ppo_v3`.

@@ -35,6 +35,7 @@ import yaml
 from gymnasium import spaces
 
 from .geometry import obb_aabb_distance, obb_aabb_overlap, wrap_angle
+from .observations import CLEAR_CAP, OBS_MODES, slot_observation
 from .scenarios import Kind, RandomizationLevel, make_scenario, slot_rectangle
 from .sensors import cast_rays
 from .vehicle import Vehicle
@@ -74,6 +75,10 @@ class ParkingEnv(gym.Env):
         #   "contained" (STRICT): the whole 4.2 x 1.8 m footprint lies inside the painted
         #                2.4 x 4.8 m bay rectangle (zero protrusion), heading within heading_tol,
         #                speed within speed_tol, held hold_steps steps. pos_tol is not used.
+        # Observation representation: 'legacy' (14-d, default, all old checkpoints) or 'slot' (18-d, environment/observations.py).
+        self.obs_mode = config.get("obs_mode", "legacy")
+        if self.obs_mode not in OBS_MODES:
+            raise ValueError(f"obs_mode must be one of {OBS_MODES}")
         self.success_mode = config.get("success_mode", "pose")
         if self.success_mode not in ("pose", "contained"):
             raise ValueError("success_mode must be 'pose' or 'contained'")
@@ -105,6 +110,9 @@ class ParkingEnv(gym.Env):
         # and so SB3's default observation normalisation has something sane to work with.
         bound = np.concatenate([[40.0, 40.0, 1.0, 1.0, self.vehicle.max_speed, self.vehicle.max_steer],
                                  np.full(self.n_rays, self.sensor_range)]).astype(np.float32)
+        if self.obs_mode == "slot":
+            bound = np.concatenate([[40.0] * 5, [1.0, 1.0, self.vehicle.max_speed, self.vehicle.max_steer],
+                                    np.full(self.n_rays, self.sensor_range), [CLEAR_CAP]]).astype(np.float32)
         self.observation_space = spaces.Box(low=-bound, high=bound, dtype=np.float32)
         # action = [steer, throttle_brake] ; see module docstring point 1.
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
@@ -143,6 +151,7 @@ class ParkingEnv(gym.Env):
         self._success_streak = 0
         self._prev_dist = self._dist_to_slot()
         self._prev_heading_err = self._heading_err()
+        self._prev_protrusion = self.bay_protrusion()
         return self._get_obs(), {"scenario": self.scenario.kind.value}
 
     def step(self, action: np.ndarray):
@@ -179,8 +188,9 @@ class ParkingEnv(gym.Env):
         succeeded = self._success_streak >= self.hold_steps and not collided
         timed_out = self.steps >= self.max_steps
 
-        reward = self._reward(dist, heading_err, steer_cmd - prev_steer, collided, succeeded, timed_out)
-        self._prev_dist, self._prev_heading_err = dist, heading_err
+        reward = self._reward(dist, heading_err, steer_cmd - prev_steer, collided, succeeded, timed_out,
+                              protrusion=protrusion)
+        self._prev_dist, self._prev_heading_err, self._prev_protrusion = dist, heading_err, protrusion
 
         terminated = bool(collided or succeeded)
         truncated = bool(timed_out and not terminated)
@@ -232,18 +242,33 @@ class ParkingEnv(gym.Env):
         sx, sy, _ = self.scenario.slot_pose
         dx, dy = sx - self.vehicle.x, sy - self.vehicle.y
         heading_err = self._heading_err()
-        obs = np.concatenate([
+        legacy = np.concatenate([
             [dx, dy, np.sin(heading_err), np.cos(heading_err), self.vehicle.v, self.vehicle.delta],
             rays,
         ]).astype(np.float32)
-        return obs
+        self._legacy_obs = legacy                 # cached so fuzzy controllers can read the legacy layout in any obs_mode
+        if self.obs_mode == "slot":
+            return slot_observation((self.vehicle.x, self.vehicle.y), self.vehicle.theta, self.scenario.slot_pose, self.vehicle.v,
+                                    self.vehicle.delta, rays, self.body_clearance())
+        return legacy
 
-    def _reward(self, dist, heading_err, steer_delta, collided, succeeded, timed_out) -> float:
+    def legacy_obs(self) -> np.ndarray:
+        """The 14-d legacy vector of the CURRENT state (for fuzzy controllers / shields), whatever obs_mode is."""
+        return self._legacy_obs
+
+    def _reward(self, dist, heading_err, steer_delta, collided, succeeded, timed_out, protrusion=None) -> float:
         c = self.reward_cfg
         r = -c["time_penalty"]
         r += c["w_dist"] * (self._prev_dist - dist)                       # positive = got closer
         r += c["w_heading"] * (abs(self._prev_heading_err) - abs(heading_err))  # positive = better aligned
         r -= c["w_smooth"] * abs(steer_delta)
+        # Optional containment shaping (w_contain, default 0 = the original reward). Potential-based
+        # on the bay protrusion (metres any corner lies outside the painted bay, capped), so it adds
+        # no net reward for dithering and cannot be farmed; it makes the training signal agree with
+        # the strict 'whole car inside the bay' metric instead of only the centre-pose box.
+        w_contain = c.get("w_contain", 0.0)
+        if w_contain and protrusion is not None:
+            r += w_contain * (min(self._prev_protrusion, 3.0) - min(protrusion, 3.0))
         # Dense "docking" bonus: reward being simultaneously close AND aligned AND slow, scaled
         # up smoothly as the car nears the success box, rather than only an all-or-nothing bonus
         # at the end. Without this, shaping credit for "closer" and "more aligned" can be earned

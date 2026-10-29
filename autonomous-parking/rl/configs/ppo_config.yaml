@@ -14,3 +14,8 @@ ppo:
   clip_range: 0.2
   net_arch: [128, 128]
   normalize_reward: true
+  # RL audit (docs/RL_AUDIT.md): the values above are the BASELINE and are intentionally unchanged.
+  # `normalize_reward` is NOT read by any code (no VecNormalize) - kept only so the baseline file is byte-compatible.
+  # Optional keys (defaults in brackets) now understood by rl.train_ppo and settable with --set KEY=VAL:
+  #   vf_coef [0.5], max_grad_norm [0.5], lr_schedule [constant|linear], lr_horizon [420000], activation [tanh|relu], obs_scale [false]
+  # PPO v3 = --set net_arch=[256,256] --reward w_contain=1.0
